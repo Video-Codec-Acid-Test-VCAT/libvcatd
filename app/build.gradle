@@ -1,0 +1,263 @@
+import org.gradle.internal.os.OperatingSystem
+
+plugins {
+    id 'com.android.library'
+    id 'maven-publish'
+}
+
+group = 'com.roncatech.vcat'
+version = '0.0.0.3'
+
+def abis = ['arm64-v8a','armeabi-v7a']
+def minApi = 29
+
+android {
+    namespace 'com.roncatech.libvcat'
+    compileSdk 35
+
+    defaultConfig {
+        minSdk minApi
+        targetSdk 35
+
+        ndk { abiFilters.addAll(abis) }
+
+        // Pass dav1d install dirs to CMake (per-ABI)
+        externalNativeBuild {
+            cmake {
+                arguments "-DDAV1D_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('dav1d/install-arm64-v8a').get().asFile.absolutePath}",
+                        "-DDAV1D_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('dav1d/install-armeabi-v7a').get().asFile.absolutePath}"
+            }
+        }
+
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    // Use AGP-managed NDK (no shell env var needed)
+    ndkVersion "27.0.12077973"
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug { debuggable true }
+    }
+
+    // Android Studio convention: src/main/cpp
+    externalNativeBuild {
+        cmake { path file('src/main/cpp/CMakeLists.txt') }
+    }
+
+    // Expose variants for maven-publish
+    publishing {
+        singleVariant("release")
+        singleVariant("debug")
+    }
+
+    // (Optional) keep if you plan to drop prebuilts/resources
+    sourceSets {
+        main {
+            jniLibs.srcDirs 'src/main/jniLibs'
+            resources.srcDirs 'src/main/resources'
+        }
+    }
+}
+
+/* ============================
+ * dav1d (Meson/Ninja) toolchain
+ * ============================ */
+
+// Defer NDK/host-tag detection until Android has configured
+def ndkDirProvider  = providers.provider { android.ndkDirectory?.absolutePath }
+def hostTagProvider = providers.provider {
+    def ndk = ndkDirProvider.getOrNull()
+    if (!ndk) return null
+    for (tag in ['darwin-arm64','darwin-x86_64','linux-x86_64']) {
+        if (file("${ndk}/toolchains/llvm/prebuilt/${tag}/bin").exists()) return tag
+    }
+    return null
+}
+def triplet = { abi ->
+    switch (abi) {
+        case 'arm64-v8a':    return 'aarch64-linux-android'
+        case 'armeabi-v7a':  return 'armv7a-linux-androideabi'
+        default:             throw new GradleException("Unsupported ABI: $abi")
+    }
+}
+def ccFor   = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang" }
+def cxxFor  = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang++" }
+def arFor   = { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-ar" }
+def stripFor= { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-strip" }
+
+def workRoot    = layout.buildDirectory.dir('dav1d').get().asFile
+def dav1dSrcDir = new File(workRoot, 'src')
+def dav1dRef    = (findProperty('dav1dRef') ?: '1.5.1') as String
+def dav1dRemote = (findProperty('dav1dRemote') ?: 'https://code.videolan.org/videolan/dav1d.git') as String
+def dav1dLocal  = (findProperty('DAV1D_SRC') ?: System.getenv('DAV1D_SRC')) as String // optional override
+
+tasks.register('fetchDav1d') {
+    description = 'Prepare dav1d source in build/dav1d/src (clone, fetch, or copy from DAV1D_SRC)'
+    outputs.dir(dav1dSrcDir)
+    doLast {
+        workRoot.mkdirs()
+
+        // If user pointed to a local dav1d tree/tarball extract, copy it in once.
+        if (dav1dLocal) {
+            logger.lifecycle("Using local DAV1D_SRC: ${dav1dLocal}")
+            delete dav1dSrcDir
+            copy {
+                from dav1dLocal
+                into dav1dSrcDir
+                exclude '.git' // keep it a clean copy so subsequent fetch logic won’t run
+            }
+            return
+        }
+
+        // Helper: clear any GIT_* vars that might break git commands
+        def clearGitEnv = { spec ->
+            spec.environment.remove('GIT_DIR')
+            spec.environment.remove('GIT_WORK_TREE')
+        }
+
+        if (!dav1dSrcDir.exists()) {
+            // Fresh clone
+            exec {
+                workingDir workRoot
+                clearGitEnv(delegate)
+                commandLine 'git','clone','--depth','1','--branch', dav1dRef, dav1dRemote,'src'
+            }
+        } else {
+            // If src exists but is not a git repo, re-clone
+            if (!new File(dav1dSrcDir, '.git').exists()) {
+                logger.lifecycle("Re-initializing dav1d/src (not a git repository).")
+                delete dav1dSrcDir
+                exec {
+                    workingDir workRoot
+                    clearGitEnv(delegate)
+                    commandLine 'git','clone','--depth','1','--branch', dav1dRef, dav1dRemote,'src'
+                }
+            } else {
+                // Update existing checkout to the desired ref
+                exec { workingDir dav1dSrcDir; clearGitEnv(delegate); commandLine 'git','fetch','--depth','1','origin', dav1dRef }
+                exec { workingDir dav1dSrcDir; clearGitEnv(delegate); commandLine 'git','checkout','-f', dav1dRef }
+                exec { workingDir dav1dSrcDir; clearGitEnv(delegate); commandLine 'git','reset','--hard','FETCH_HEAD' }
+            }
+        }
+    }
+}
+
+tasks.register('cleanDav1d') {
+    description = 'Remove dav1d build/installs'
+    doLast { delete workRoot }
+}
+
+abis.each { abi ->
+    def crossFile  = layout.buildDirectory.file("dav1d/toolchains/meson-${abi}.ini").get().asFile
+    def buildDir   = new File(workRoot, "build-${abi}")
+    def installDir = new File(workRoot, "install-${abi}")
+
+    tasks.register("genCrossFile_${abi}") {
+        dependsOn 'fetchDav1d'
+        outputs.file(crossFile)
+        doLast {
+            def ndk = ndkDirProvider.get()
+            def tag = hostTagProvider.get()
+            if (!ndk || !tag) throw new GradleException("NDK not found. Ensure ndkVersion ${android.ndkVersion} is installed in Android SDK Manager.")
+
+            crossFile.parentFile.mkdirs()
+            crossFile.text = """
+[binaries]
+c = '${ccFor(abi, ndk, tag)}'
+cpp = '${cxxFor(abi, ndk, tag)}'
+ar = '${arFor(ndk, tag)}'
+strip = '${stripFor(ndk, tag)}'
+pkg-config = 'false'
+
+[built-in options]
+c_std = 'c11'
+cpp_std = 'c++17'
+werror = false
+default_library = 'static'
+
+[host_machine]
+system = 'android'
+cpu_family = '${abi == 'arm64-v8a' ? 'aarch64' : 'arm'}'
+cpu = '${abi == 'arm64-v8a' ? 'armv8' : 'armv7'}'
+endian = 'little'
+""".stripIndent()
+        }
+    }
+
+    tasks.register("buildDav1d_${abi}") {
+        dependsOn "genCrossFile_${abi}"
+        outputs.dir(installDir)
+        doLast {
+            buildDir.mkdirs()
+            installDir.mkdirs()
+            exec {
+                workingDir buildDir
+                commandLine 'meson','setup','.', dav1dSrcDir.absolutePath,
+                        '--cross-file', crossFile.absolutePath,
+                        '-Ddefault_library=static',
+                        '-Denable_asm=true',
+                        '-Denable_tests=false',
+                        '-Dbuildtype=release',
+                        '--prefix', installDir.absolutePath
+            }
+            exec { workingDir buildDir; commandLine 'ninja' }
+            exec { workingDir buildDir; commandLine 'ninja','install' }
+        }
+    }
+}
+
+// Ensure dav1d is built before native configure/compile
+tasks.named('preBuild').configure {
+    dependsOn abis.collect { "buildDav1d_${it}" }
+}
+
+/* ============================
+ * Publishing to GitHub Packages
+ * ============================ */
+plugins.withId('maven-publish') {
+    afterEvaluate {
+        publishing {
+            publications {
+                // Release AAR
+                register("release", MavenPublication) {
+                    def comp = components.findByName("release")
+                    if (comp == null) throw new GradleException("Android 'release' component not found. Did you enable android.publishing.singleVariant('release')?")
+                    from comp
+                    groupId = project.group
+                    artifactId = 'libvcat'
+                    version = project.version
+                    pom { url = 'https://github.com/jonathannah/libvcat' }
+                }
+                // Debug AAR
+                register("debug", MavenPublication) {
+                    def comp = components.findByName("debug")
+                    if (comp == null) throw new GradleException("Android 'debug' component not found. Did you enable android.publishing.singleVariant('debug')?")
+                    from comp
+                    groupId = project.group
+                    artifactId = 'libvcat-debug'
+                    version = project.version
+                    pom { url = 'https://github.com/jonathannah/libvcat' }
+                }
+            }
+            repositories {
+                maven {
+                    name = 'GitHubPackages'
+                    url = uri('https://maven.pkg.github.com/jonathannah/libvcat')
+                    credentials {
+                        username = System.getenv('GITHUB_ACTOR') ?: findProperty('gpr.user')
+                        password = System.getenv('GITHUB_TOKEN') ?: findProperty('gpr.key')
+                    }
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    compileOnly "androidx.annotation:annotation:1.7.1"
+    compileOnly "com.google.android.exoplayer:exoplayer-core:2.19.1"
+}

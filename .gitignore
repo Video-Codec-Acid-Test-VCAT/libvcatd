@@ -1,0 +1,51 @@
+# --- Gradle wrapper files (✅ keep these tracked)
+!gradlew
+!gradlew.bat
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+!gradle.properties
+!settings.gradle
+!build.gradle
+!build.gradle.kts
+!settings.gradle.kts
+
+# --- Gradle build output (ignore)
+.gradle/
+build/
+*/build/
+
+# --- Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# --- Local configuration (ignore)
+local.properties
+.DS_Store
+
+# --- Log and crash files
+*.log
+*.hprof
+
+# --- APK and native build artifacts
+*.apk
+*.ap_
+.externalNativeBuild/
+.cxx/
+
+# --- NDK / JNI build intermediates
+*.so
+obj/
+
+# --- Generated code
+gen/
+bin/
+/classes.jar
+# --- Release artifacts
+app/release/
+
+# --- temp lib folder for decoder
+libs/
+
+extension-dav1d/src/main/cpp/third_party/
