@@ -113,7 +113,7 @@ static void flush_pending_to_decoder(NativeCtx* ctx) {
 // --------------------------- JNI API ---------------------------
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_ronctech_libvcat_NativeDav1d_nativeCreate(
+Java_com_roncatech_libvcat_NativeDav1d_nativeCreate(
         JNIEnv* /*env*/, jclass /*clazz*/, jint frameThreads, jint /*tileThreads*/) {
     auto* ctx = new NativeCtx();
 
@@ -132,7 +132,7 @@ Java_com_ronctech_libvcat_NativeDav1d_nativeCreate(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_ronctech_libvcat_NativeDav1d_nativeFlush(
+Java_com_roncatech_libvcat_NativeDav1d_nativeFlush(
         JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
     if (!ctx) return;
@@ -142,7 +142,7 @@ Java_com_ronctech_libvcat_NativeDav1d_nativeFlush(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_ronctech_libvcat_NativeDav1d_nativeClose(
+Java_com_roncatech_libvcat_NativeDav1d_nativeClose(
         JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
     if (!ctx) return;
@@ -158,7 +158,7 @@ Java_com_ronctech_libvcat_NativeDav1d_nativeClose(
 }
 
 extern "C" JNIEXPORT jint JNICALL
-        Java_com_ronctech_libvcat_NativeDav1d_nativeQueueInput(
+        Java_com_roncatech_libvcat_NativeDav1d_nativeQueueInput(
         JNIEnv* env, jclass /*clazz*/, jlong handle,
         jobject byteBuffer, jint offset, jint size, jlong ptsUs) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
@@ -197,7 +197,7 @@ extern "C" JNIEXPORT jint JNICALL
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-        Java_com_ronctech_libvcat_NativeDav1d_nativeHasCapacity(
+        Java_com_roncatech_libvcat_NativeDav1d_nativeHasCapacity(
         JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
     if (!ctx || !ctx->c) return JNI_FALSE;
@@ -205,7 +205,7 @@ extern "C" JNIEXPORT jboolean JNICALL
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-        Java_com_ronctech_libvcat_NativeDav1d_nativeDequeueFrame(
+        Java_com_roncatech_libvcat_NativeDav1d_nativeDequeueFrame(
         JNIEnv* env, jclass /*clazz*/, jlong handle,
         jintArray outWH, jlongArray outPtsUs) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
@@ -248,7 +248,7 @@ extern "C" JNIEXPORT jlong JNICALL
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_ronctech_libvcat_NativeDav1d_nativeSetSurface(
+Java_com_roncatech_libvcat_NativeDav1d_nativeSetSurface(
         JNIEnv* env, jclass, jlong handle, jobject surface) {
 
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
@@ -279,7 +279,7 @@ static inline void ensureWindowConfigured(NativeCtx* ctx, int w, int h, int fmt)
 }
 
 extern "C" JNIEXPORT jint JNICALL
-        Java_com_ronctech_libvcat_NativeDav1d_nativeRenderToSurface(
+        Java_com_roncatech_libvcat_NativeDav1d_nativeRenderToSurface(
         JNIEnv*, jclass, jlong handle, jlong nativePic, jobject /*unused*/) {
 
     auto* ctx  = reinterpret_cast<NativeCtx*>(handle);
@@ -339,7 +339,7 @@ extern "C" JNIEXPORT jint JNICALL
 
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_ronctech_libvcat_NativeDav1d_nativeReleasePicture(
+Java_com_roncatech_libvcat_NativeDav1d_nativeReleasePicture(
         JNIEnv* /*env*/, jclass /*clazz*/, jlong /*handle*/, jlong nativePic) {
     auto* hold = reinterpret_cast<PictureHolder*>(nativePic);
     if (!hold) return;
@@ -348,7 +348,7 @@ Java_com_ronctech_libvcat_NativeDav1d_nativeReleasePicture(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_ronctech_libvcat_NativeDav1d_dav1dGetVersion(JNIEnv* env) {
+Java_com_roncatech_libvcat_NativeDav1d_dav1dGetVersion(JNIEnv* env, jclass /*clazz*/) {
     const char *src = dav1d_version();
     char buffer[32];
     snprintf(buffer, sizeof(buffer), "%s", src);
@@ -357,7 +357,7 @@ Java_com_ronctech_libvcat_NativeDav1d_dav1dGetVersion(JNIEnv* env) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_ronctech_libvcat_NativeDav1d_nativeSignalEof(
+Java_com_roncatech_libvcat_NativeDav1d_nativeSignalEof(
         JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
     if (!ctx || !ctx->c) return;

@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'com.roncatech.vcat'
-version = '0.0.0.3'
+version = '0.0.1.3'
 
 def abis = ['arm64-v8a','armeabi-v7a']
 def minApi = 29
@@ -227,10 +227,10 @@ plugins.withId('maven-publish') {
                     def comp = components.findByName("release")
                     if (comp == null) throw new GradleException("Android 'release' component not found. Did you enable android.publishing.singleVariant('release')?")
                     from comp
-                    groupId = project.group
-                    artifactId = 'libvcat'
-                    version = project.version
-                    pom { url = 'https://github.com/jonathannah/libvcat' }
+                    groupId = project.group                   // keep: com.roncatech.vcat
+                    artifactId = 'libvcat'                    // keep same package name
+                    version = project.version                 // bump this before publish
+                    pom { url = 'https://github.com/jonathannah/lib_vcat_decoders' }
                 }
                 // Debug AAR
                 register("debug", MavenPublication) {
@@ -240,13 +240,14 @@ plugins.withId('maven-publish') {
                     groupId = project.group
                     artifactId = 'libvcat-debug'
                     version = project.version
-                    pom { url = 'https://github.com/jonathannah/libvcat' }
+                    pom { url = 'https://github.com/jonathannah/lib_vcat_decoders' }
                 }
             }
             repositories {
                 maven {
                     name = 'GitHubPackages'
-                    url = uri('https://maven.pkg.github.com/jonathannah/libvcat')
+                    // 👉 publish to the old repo
+                    url = uri('https://maven.pkg.github.com/jonathannah/lib_vcat_decoders')
                     credentials {
                         username = System.getenv('GITHUB_ACTOR') ?: findProperty('gpr.user')
                         password = System.getenv('GITHUB_TOKEN') ?: findProperty('gpr.key')
@@ -256,6 +257,7 @@ plugins.withId('maven-publish') {
         }
     }
 }
+
 
 dependencies {
     compileOnly "androidx.annotation:annotation:1.7.1"
