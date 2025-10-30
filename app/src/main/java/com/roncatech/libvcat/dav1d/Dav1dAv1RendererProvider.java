@@ -30,7 +30,7 @@
  * Contact: legal@roncatech.com
  */
 
-package com.roncatech.libvcat;
+package com.roncatech.libvcat.dav1d;
 
 import android.content.Context;
 import android.os.Handler;

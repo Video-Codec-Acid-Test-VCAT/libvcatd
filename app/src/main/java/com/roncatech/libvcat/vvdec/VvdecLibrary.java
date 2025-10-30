@@ -30,14 +30,18 @@
  * Contact: legal@roncatech.com
  */
 
-package com.roncatech.libvcat;
+package com.roncatech.libvcat.vvdec;
 
-/** Loads the JNI shim once. */
-public final class Dav1dLibrary {
+/** Loads the vvdec + JNI shim once. */
+public final class VvdecLibrary {
     private static volatile boolean loaded;
-    private Dav1dLibrary() {}
+
+    private VvdecLibrary() {}
+
     public static synchronized void load() {
         if (!loaded) {
+            // Loading vvdec first is harmless; some builds may link it dynamically.
+            try { System.loadLibrary("vvdec"); } catch (Throwable ignored) {}
             System.loadLibrary("vcat_jni");
             loaded = true;
         }

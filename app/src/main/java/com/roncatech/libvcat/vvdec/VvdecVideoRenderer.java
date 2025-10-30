@@ -30,7 +30,7 @@
  * Contact: legal@roncatech.com
  */
 
-package com.roncatech.libvcat;
+package com.roncatech.libvcat.vvdec;
 
 import android.os.Handler;
 import android.util.Log;
@@ -39,123 +39,120 @@ import android.view.Surface;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.RendererCapabilities;
-import com.google.android.exoplayer2.decoder.CryptoConfig; // ExoPlayer 2.x package
+import com.google.android.exoplayer2.decoder.CryptoConfig; // ExoPlayer 2.x
 import com.google.android.exoplayer2.decoder.Decoder;
 import com.google.android.exoplayer2.decoder.DecoderException;
 import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
 import com.google.android.exoplayer2.decoder.DecoderReuseEvaluation;
 import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
-import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.video.DecoderVideoRenderer;
 import com.google.android.exoplayer2.video.VideoRendererEventListener;
 
-public final class Dav1dVideoRenderer extends DecoderVideoRenderer {
+/**
+ * Software VVC (H.266) renderer using vvdec via JNI, patterned after the dav1d path.
+ */
+public final class VvdecVideoRenderer extends DecoderVideoRenderer {
 
-    private final static String TAG = "Dav1dVideoRenderer";
-
+    private static final String TAG = "VvdecVideoRenderer";
     private static final int MAX_DROPPED_FRAMES_TO_NOTIFY = 50;
 
-    private final int frameThreads;
-    private final int tileThreads;
+    private final int threads;
 
-    private Dav1dDecoder decoder;
+    private VvdecDecoder decoder;
     private Surface currentSurface;
 
-    public Dav1dVideoRenderer(
+    /**
+     * @param allowedJoiningTimeMs same semantics as ExoPlayer’s DecoderVideoRenderer
+     * @param eventHandler handler for video events
+     * @param eventListener listener for video events
+     * @param threads decoder worker thread count (>=1)
+     */
+    public VvdecVideoRenderer(
             long allowedJoiningTimeMs,
             Handler eventHandler,
             VideoRendererEventListener eventListener,
-            int frameThreads,
-            int tileThreads) {
-        // NOTE: 4-arg super() is required in ExoPlayer 2.x
+            int threads) {
         super(allowedJoiningTimeMs, eventHandler, eventListener, MAX_DROPPED_FRAMES_TO_NOTIFY);
-        this.frameThreads = Math.max(1, frameThreads);
-        this.tileThreads  = Math.max(1, tileThreads);
+        this.threads = Math.max(1, threads);
     }
 
-    @Override public String getName() { return "Dav1dVideoRenderer"; }
-
+    @Override public String getName() { return "VvdecVideoRenderer"; }
 
     @Override
     protected Decoder<DecoderInputBuffer, ? extends VideoDecoderOutputBuffer, ? extends DecoderException>
-    createDecoder(Format format, CryptoConfig cryptoConfig) throws Dav1dDecoderException {
-        this.decoder = new Dav1dDecoder(
-                frameThreads,
-                tileThreads);
-
-        if(this.currentSurface != null){
+    createDecoder(Format format, CryptoConfig cryptoConfig) throws VvdecDecoderException {
+        VvdecLibrary.load();
+        this.decoder = new VvdecDecoder(threads);
+        if (this.currentSurface != null) {
             this.decoder.setOutputSurface(this.currentSurface);
         }
+        // pass input format (for width/height reporting etc.)
+        this.decoder.setInputFormat(format);
         return this.decoder;
     }
 
     @Override
-    protected void renderOutputBufferToSurface(VideoDecoderOutputBuffer outputBuffer, Surface surface)
-            throws Dav1dDecoderException {
+    protected void renderOutputBufferToSurface(
+            VideoDecoderOutputBuffer outputBuffer, Surface surface)
+            throws VvdecDecoderException {
         if (decoder == null) {
-            throw new Dav1dDecoderException(
+            throw new VvdecDecoderException(
                     "Failed to render output buffer to surface: decoder is not initialized.");
         }
-        // Only notify native when the Surface actually changes.
         if (surface != currentSurface) {
-            currentSurface = surface;                  // may be null
-            decoder.setOutputSurface(currentSurface);  // JNI caches/release ANativeWindow
+            currentSurface = surface;                 // may be null
+            decoder.setOutputSurface(currentSurface); // JNI caches/releases ANativeWindow
         }
 
-        decoder.renderToSurface((Dav1dOutputBuffer)outputBuffer);
+        decoder.renderToSurface((VvdecOutputBuffer) outputBuffer);
         outputBuffer.release();
     }
 
     private static String videoOutputModeStr(int outputMode){
         switch (outputMode){
-            case C.VIDEO_OUTPUT_MODE_YUV:
-                return "VIDEO_OUTPUT_MODE_YUV";
-            case C.VIDEO_OUTPUT_MODE_SURFACE_YUV:
-                return "VIDEO_OUTPUT_MODE_SURFACE_YUV";
+            case C.VIDEO_OUTPUT_MODE_YUV: return "VIDEO_OUTPUT_MODE_YUV";
+            case C.VIDEO_OUTPUT_MODE_SURFACE_YUV: return "VIDEO_OUTPUT_MODE_SURFACE_YUV";
+            case C.VIDEO_OUTPUT_MODE_NONE: return "VIDEO_OUTPUT_MODE_NONE";
         }
-
-        return "VIDEO_OUTPUT_MODE_NONE";
+        return "UNKNOWN";
     }
+
     @Override
     protected void setDecoderOutputMode(int outputMode) {
-
-        Log.d(TAG,"setDecoderOutputMode="+outputMode);
-
+        Log.d(TAG, "setDecoderOutputMode=" + videoOutputModeStr(outputMode));
         switch (outputMode) {
-            case com.google.android.exoplayer2.C.VIDEO_OUTPUT_MODE_YUV:
-            case com.google.android.exoplayer2.C.VIDEO_OUTPUT_MODE_SURFACE_YUV:
+            case C.VIDEO_OUTPUT_MODE_YUV:
+            case C.VIDEO_OUTPUT_MODE_SURFACE_YUV:
             case C.VIDEO_OUTPUT_MODE_NONE:
-                // dav1d always outputs YUV planes. If your Dav1dDecoder exposes setOutputMode(),
-                // set it to YUV; otherwise you can ignore this call.
-                // example: decoder.setOutputMode(com.google.android.exoplayer2.C.VIDEO_OUTPUT_MODE_YUV);
+                // vvdec always outputs planar YUV; surface blit is handled in JNI.
                 return;
-
             default:
                 throw new IllegalArgumentException(
-                        "Surface output mode (" + videoOutputModeStr(outputMode) + ") not supported by dav1d");
+                        "Surface output mode (" + videoOutputModeStr(outputMode) + ") not supported by vvdec");
         }
     }
 
     @Override
     protected DecoderReuseEvaluation canReuseDecoder(String name, Format oldF, Format newF) {
-        // Re-init on format change.
+        // Re-init on format change (simplest + safest for benchmarking).
         return new DecoderReuseEvaluation(
-                name,
-                oldF,
-                newF,
-                DecoderReuseEvaluation.REUSE_RESULT_NO, // or just 0 if the constant isn't present
-                0                                       // discardReasons bitmask
-        );
+                name, oldF, newF,
+                DecoderReuseEvaluation.REUSE_RESULT_NO, /* discardReasons */ 0);
     }
 
     @Override
     public int supportsFormat(Format format) {
         final String mime = format.sampleMimeType;
-        if (!MimeTypes.VIDEO_AV1.equals(mime)) {
+
+        Log.i(TAG, "supportsFormat check for " + mime);
+
+        // ExoPlayer 2.x doesn’t define a constant for VVC; accept common strings.
+        final boolean isVvc = "video/vvc".equals(mime) || "video/h266".equals(mime);
+        if (!isVvc) {
             return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_TYPE);
         }
-        // dav1d path is clear-only (no DRM)
         if (format.drmInitData != null) {
+            // SW path is clear-only
             return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_DRM);
         }
         return RendererCapabilities.create(C.FORMAT_HANDLED);
@@ -163,22 +160,21 @@ public final class Dav1dVideoRenderer extends DecoderVideoRenderer {
 
     @Override
     protected boolean shouldDropOutputBuffer(long earlyUs, long elapsedRealtimeUs) {
-        // only drop if >50 ms late
+        // Drop only if >50 ms late (tune as needed for tests).
         return earlyUs < -50_000;
     }
 
     @Override
     protected boolean shouldDropBuffersToKeyframe(long earlyUs, long elapsedRealtimeUs) {
-        // only skip forward to a keyframe if we're ~0.5 s behind
+        // Seek forward to keyframe if we're ~0.5 s behind.
         return earlyUs < -500_000;
     }
 
     @Override
     protected boolean shouldForceRenderOutputBuffer(long earlyUs, long elapsedRealtimeUs) {
-        // render when due or slightly late
+        // Render when due or slightly late.
         return earlyUs <= 0;
     }
-
 
     @Override
     protected void onDisabled() {
@@ -191,6 +187,4 @@ public final class Dav1dVideoRenderer extends DecoderVideoRenderer {
             super.onDisabled();
         }
     }
-
-
 }
