@@ -26,13 +26,29 @@ While **VCAT** delivers the full benchmarking application, **libvcat** houses th
   Provides hooks for integrating with VCAT’s ExoPlayer pipeline while maintaining modular separation from the app layer.
 
 ## Build Instructions
+## Prerequisites (for building decoders used by libvcat)
 
-### 1. Prerequisites
-- JDK 17 or newer  
-- Android SDK and NDK (for native decoder components)  
-- Gradle build environment (bundled with VCAT)
+### Common (Android / NDK toolchain)
+- **JDK 17+**
+- **Android SDK** + **Android NDK** (Clang toolchain; r25c or newer recommended)
+- **Python 3.8+** (build tooling)
+- **pkg-config**
+- **Ninja** (build backend)
 
-### 2. Build libvcat
+### dav1d (AV1) — built with Meson
+- **Meson ≥ 1.2**
+- **Ninja**
+- **Clang/Clang++** from the Android NDK
+- **For x86/x86_64 targets only:** **nasm ≥ 2.14** (required for dav1d’s x86 ASM)
+- **For ARM/ARM64 (NEON):** no nasm required; NEON ASM is assembled by Clang/LLVM
+- (Cross-compiling) a Meson **cross file** configured for your NDK/ABI
+
+> Notes
+> - On macOS/Linux, install `meson`, `ninja`, `pkg-config`, and (if building x86) `nasm` via your package manager.
+> - On ARM-only Android builds, `nasm` is not needed; keep it only if you also build x86/x86_64.
+> - libvcat’s Gradle/NDK configuration wires these tools into the build; ensure they’re on your PATH.
+
+### Build libvcat
 From the **libvcat/** project root:
 Release
 ```bash
@@ -47,10 +63,10 @@ To publish to local Maven
 ./gradlew publishToMavenLocal
 ```
 
-### 3) Feedback
+### Feedback
 - [Use the discord channel for VCAT conversations](https://discord.gg/36XQYATF)
 
-### 4) Bugs
+### Bugs
 - Open issues on VCAT or libvcat github projects.  If unsure which to use, use VCAT.
 - Include: **steps to reproduce**, **expected vs actual behavior**, **timestamp & timezone**, **browser/app version**, and **screenshots**.
 
