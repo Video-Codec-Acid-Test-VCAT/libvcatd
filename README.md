@@ -7,7 +7,7 @@
 # libvcat — Core Media Library for VCAT
 
 ## About libvcat
-**libvcat** is the core media library powering **VCAT (Video Codec Acid Test)**.  
+**libvcat** is the core media library powering **[VCAT (Video Codec Acid Test)](https://github.com/jonathannah/vcat)**.  
 It provides the foundational components required for decoding, parsing, and interacting with video data in the VCAT ecosystem.
 
 While **VCAT** delivers the full benchmarking application, **libvcat** houses the lower-level logic — decoders, parsers, and supporting utilities — that make VCAT’s playback and telemetry possible.
