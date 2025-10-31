@@ -52,13 +52,12 @@ To publish to local Maven
 ./gradlew publishToMavenLocal
 ```
 
-### 3) Model feedback form (web)
-- Use OpenAI’s **Chat model feedback** form to report general model issues.
-- Include: **steps to reproduce**, **expected vs actual behavior**, **timestamp & timezone**, **browser/app version**, and **screenshots**.
+### 3) Feedback
+- [Use the discord channel for VCAT conversations](https://discord.gg/36XQYATF)
 
-### 4) Community forum (optional, public)
-- Post details on the **OpenAI Community** to compare notes and get guidance (not an official support ticket).
-- Provide clear **repro steps**, **environment info**, and any **examples** that illustrate the issue.
+### 4) Bugs
+- Open issues on VCAT or libvcat github projects.  If unsure which to use, use VCAT.
+- Include: **steps to reproduce**, **expected vs actual behavior**, **timestamp & timezone**, **browser/app version**, and **screenshots**.
 
 ## Relationship to VCAT
 | Component | Role |
