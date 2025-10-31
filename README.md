@@ -39,11 +39,16 @@ While **VCAT** delivers the full benchmarking application, **libvcat** houses th
 
 ### 2. Build libvcat
 From the **libvcat/** project root:
+Release
 ```bash
 ./gradlew clean assembleRelease
+```
+Debug
+```bash
 ./gradlew clean assembleDebug
-
-# to publis local
+```
+To publish to local Maven
+```bash
 ./gradlew publishToMavenLocal
 ```
 
