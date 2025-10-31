@@ -26,7 +26,6 @@ While **VCAT** delivers the full benchmarking application, **libvcat** houses th
   Provides hooks for integrating with VCAT’s ExoPlayer pipeline while maintaining modular separation from the app layer.
 
 ## Build Instructions
-## Prerequisites (for building decoders used by libvcat)
 
 ### Common (Android / NDK toolchain)
 - **JDK 17+**
