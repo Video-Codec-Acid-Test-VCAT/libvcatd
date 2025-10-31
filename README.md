@@ -41,6 +41,7 @@ While **VCAT** delivers the full benchmarking application, **libvcat** houses th
 From the **libvcat/** project root:
 ```bash
 ./gradlew clean assembleRelease
+```
 
 ### 3) Model feedback form (web)
 - Use OpenAI’s **Chat model feedback** form to report general model issues.
