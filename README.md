@@ -41,6 +41,10 @@ While **VCAT** delivers the full benchmarking application, **libvcat** houses th
 From the **libvcat/** project root:
 ```bash
 ./gradlew clean assembleRelease
+./gradlew clean assembleDebug
+
+# to publis local
+./gradlew publishToMavenLocal
 ```
 
 ### 3) Model feedback form (web)
@@ -73,10 +77,9 @@ Contributions via issues and PRs are welcome.
 ---
 
 ## Developer Integration Notes
-- Building VCAT from source automatically includes **libvcat** as a project dependency when both live in the same repo tree.
+- Building VCAT from source automatically includes **libvcat** pulling the pinned artifact from Maven Central.  
 - If libvcat is rebuilt independently, developers can either publish to `mavenLocal` or point VCAT’s `settings.gradle` at the local libvcat project path.
-- No external dependency setup is required; VCAT links against the locally available libvcat build during development.
-
+- No external dependency setup is required; VCAT resolves libvcat dependency using local libvcat artifacts if available, otherwise from Maven Central.
 
 ---
 
