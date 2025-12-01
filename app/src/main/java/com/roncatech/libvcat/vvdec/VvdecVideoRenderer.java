@@ -29,7 +29,6 @@
  *
  * Contact: legal@roncatech.com
  */
-
 package com.roncatech.libvcat.vvdec;
 
 import android.os.Handler;

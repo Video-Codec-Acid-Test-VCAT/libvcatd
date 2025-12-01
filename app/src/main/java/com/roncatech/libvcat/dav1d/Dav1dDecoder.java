@@ -40,8 +40,7 @@ import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
 import com.google.android.exoplayer2.decoder.DecoderOutputBuffer;
 import com.google.android.exoplayer2.decoder.SimpleDecoder;
 import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
-
-final class Dav1dDecoder
+ class Dav1dDecoder
         extends SimpleDecoder<DecoderInputBuffer, Dav1dOutputBuffer, Dav1dDecoderException> {
 
     // Local copies of 2.x buffer flags to avoid Media3 suggestions.

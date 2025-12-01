@@ -36,12 +36,6 @@ import android.view.Surface;
 import java.nio.ByteBuffer;
 
 public final class NativeVvdec {
-    static {
-        // If libvcat_jni has DT_NEEDED on libvvdec, loading the JNI lib is enough.
-        // Loading vvdec first is harmless; ignore if it isn't needed.
-        try { System.loadLibrary("vvdec"); } catch (Throwable ignored) {}
-        System.loadLibrary("vcat_jni");
-    }
 
     // Creates a decoder context; returns 0 on failure.
     public static native long nativeCreate(int threads);

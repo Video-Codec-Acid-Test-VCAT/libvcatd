@@ -36,8 +36,7 @@ import android.content.Context;
 import android.os.Handler;
 import com.google.android.exoplayer2.Renderer;
 import com.google.android.exoplayer2.video.VideoRendererEventListener;
-
-public final class Dav1dAv1Provider implements Dav1dAv1RendererProvider {
+ final class Dav1dAv1Provider implements Dav1dAv1RendererProvider {
     private final int frameThreads, tileThreads;
 
     public Dav1dAv1Provider(int frameThreads, int tileThreads) {

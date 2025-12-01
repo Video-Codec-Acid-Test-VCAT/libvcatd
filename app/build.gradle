@@ -15,7 +15,7 @@ def localSuffix = (findProperty('localVersionSuffix') ?: '')
 version = baseVersion + localSuffix   // e.g. -PlocalVersionSuffix=-local
 
 def abis      = ['arm64-v8a','armeabi-v7a']
-def vvdecAbis = ['arm64-v8a']          // vvdec arm64 only
+def vvdecAbis = ['arm64-v8a','armeabi-v7a']          // vvdec arm64 only
 def minApi    = 29
 
 android {
@@ -33,7 +33,8 @@ android {
             cmake {
                 arguments "-DDAV1D_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('dav1d/install-arm64-v8a').get().asFile.absolutePath}",
                         "-DDAV1D_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('dav1d/install-armeabi-v7a').get().asFile.absolutePath}",
-                        "-DVVDEC_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('vvdec/install-arm64-v8a').get().asFile.absolutePath}"
+                        "-DVVDEC_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('vvdec/install-arm64-v8a').get().asFile.absolutePath}",
+                        "-DVVDEC_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('vvdec/install-armeabi-v7a').get().asFile.absolutePath}"
             }
         }
 
@@ -327,4 +328,8 @@ tasks.register('publishLocal') {
 dependencies {
     compileOnly "androidx.annotation:annotation:1.7.1"
     compileOnly "com.google.android.exoplayer:exoplayer-core:2.19.1"
+    implementation "org.checkerframework:checker-compat-qual:2.5.5" // provides @NullableType
+    implementation "com.google.guava:guava:32.1.3-android"           // AtomParsers uses ImmutableList/Ints
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation "com.google.android.exoplayer:exoplayer-core:2.19.1"
 }

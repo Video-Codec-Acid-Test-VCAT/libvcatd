@@ -40,8 +40,6 @@ public final class VvdecLibrary {
 
     public static synchronized void load() {
         if (!loaded) {
-            // Loading vvdec first is harmless; some builds may link it dynamically.
-            try { System.loadLibrary("vvdec"); } catch (Throwable ignored) {}
             System.loadLibrary("vcat_jni");
             loaded = true;
         }

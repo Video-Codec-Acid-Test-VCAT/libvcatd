@@ -33,7 +33,7 @@
 package com.roncatech.libvcat.dav1d;
 
 /** Loads the JNI shim once. */
-public final class Dav1dLibrary {
+final class Dav1dLibrary {
     private static volatile boolean loaded;
     private Dav1dLibrary() {}
     public static synchronized void load() {

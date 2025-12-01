@@ -37,8 +37,7 @@ import android.os.Handler;
 
 import com.google.android.exoplayer2.Renderer;
 import com.google.android.exoplayer2.video.VideoRendererEventListener;
-
-public interface Dav1dAv1RendererProvider {
+ interface Dav1dAv1RendererProvider {
     /** Stable id used by user config, e.g. "dav1d" or "mediacodec". */
     String id();
 

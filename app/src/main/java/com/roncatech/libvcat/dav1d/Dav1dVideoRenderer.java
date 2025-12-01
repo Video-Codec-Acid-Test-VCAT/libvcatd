@@ -49,7 +49,7 @@ import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.video.DecoderVideoRenderer;
 import com.google.android.exoplayer2.video.VideoRendererEventListener;
 
-public final class Dav1dVideoRenderer extends DecoderVideoRenderer {
+final class Dav1dVideoRenderer extends DecoderVideoRenderer {
 
     private final static String TAG = "Dav1dVideoRenderer";
 

@@ -32,6 +32,7 @@
 
 package com.roncatech.libvcat.vvdec;
 
+import android.util.Log;
 import android.view.Surface;
 
 import com.google.android.exoplayer2.C;
@@ -40,6 +41,7 @@ import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
 import com.google.android.exoplayer2.decoder.DecoderOutputBuffer;
 import com.google.android.exoplayer2.decoder.SimpleDecoder;
 import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
+import java.nio.ByteBuffer;
 
 final class VvdecDecoder
         extends SimpleDecoder<DecoderInputBuffer, VvdecOutputBuffer, VvdecDecoderException> {
@@ -156,7 +158,7 @@ final class VvdecDecoder
                 out.format = inputFormat;
                 out.nativePic = h;
                 if (decodeOnly) out.addFlag(FLAG_DECODE_ONLY);
-                return null;
+                //return null;
             }
             out.addFlag(FLAG_END_OF_STREAM);
             return null;
@@ -177,7 +179,7 @@ final class VvdecDecoder
                 out.format = inputFormat;
                 out.nativePic = h;
                 if (decodeOnly) out.addFlag(FLAG_DECODE_ONLY);
-                return null;
+                //return null;
             }
             // No frame yet; let upstream feed again later.
             return null;
@@ -220,4 +222,41 @@ final class VvdecDecoder
             throw new VvdecDecoderException("nativeRenderToSurface failed: " + rc);
         }
     }
+
+    // Get the vvdec decoder version string (e.g., "3.0.0").
+    public static native String vvdecGetVersion();
+
+    /*// Creates a decoder context; returns 0 on failure.
+    public static native long nativeCreate(int threads);
+
+    // Flushes decoder state (drains/clears internal queues).
+    public static native void nativeFlush(long ctx);
+
+    // Destroys the decoder context and frees resources.
+    public static native void nativeClose(long ctx);
+
+    public static native boolean nativeHasCapacity(long ctx);
+    public static native void    nativeSignalEof(long ctx);
+
+    // Queues one compressed sample (direct ByteBuffer required).
+    // Returns 0 on success; negative errno on error (e.g., -22 for EINVAL).
+    public static native int nativeQueueInput(
+        long ctx, ByteBuffer buffer, int offset, int size, long ptsUs);
+
+    // Attempts to dequeue a decoded frame.
+    // Returns 0 if no frame yet; otherwise a non-zero native handle.
+    // outWidthHeight[0]=w, [1]=h; outPtsUs[0]=pts.
+    public static native long nativeDequeueFrame(
+        long ctx, int[] outWidthHeight, long[] outPtsUs);
+
+    // Renders a decoded frame to the current Surface (YV12 blit in JNI).
+    // Returns 0 on success; negative on error.
+    public static native int nativeRenderToSurface(long ctx, long nativePic);
+
+    // Releases a previously dequeued native picture handle.
+    public static native void nativeReleasePicture(long ctx, long nativePic);
+
+
+    // Binds/unbinds the output Surface (cached as ANativeWindow in JNI).
+    public static native void nativeSetSurface(long handle, Surface surface);*/
 }
