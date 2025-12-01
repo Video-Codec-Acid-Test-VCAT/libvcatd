@@ -75,14 +75,19 @@ android {
 /* ===== dav1d build (Meson/Ninja) ===== */
 
 def ndkDirProvider  = providers.provider { android.ndkDirectory?.absolutePath }
+// Add Windows host tag and avoid hard failure on null
 def hostTagProvider = providers.provider {
     def ndk = ndkDirProvider.getOrNull()
     if (!ndk) return null
-    for (tag in ['darwin-arm64','darwin-x86_64','linux-x86_64']) {
-        if (file("${ndk}/toolchains/llvm/prebuilt/${tag}/bin").exists()) return tag
+
+    // Known NDK host tags
+    def tags = ['darwin-arm64','darwin-x86_64','linux-x86_64','windows-x86_64']
+
+    return tags.find { tag ->
+        file("${ndk}/toolchains/llvm/prebuilt/${tag}/bin").exists()
     }
-    return null
 }
+
 def triplet = { abi -> abi == 'arm64-v8a' ? 'aarch64-linux-android' : 'armv7a-linux-androideabi' }
 def ccFor    = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang" }
 def cxxFor   = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang++" }
@@ -124,6 +129,8 @@ tasks.register('fetchDav1d') {
 
 tasks.register('cleanDav1d') { doLast { delete dav1dWorkRoot } }
 
+
+
 abis.each { abi ->
     def crossFile  = layout.buildDirectory.file("dav1d/toolchains/meson-${abi}.ini").get().asFile
     def buildDir   = new File(dav1dWorkRoot, "build-${abi}")
@@ -133,8 +140,15 @@ abis.each { abi ->
         dependsOn 'fetchDav1d'
         outputs.file(crossFile)
         doLast {
-            def ndk = ndkDirProvider.get(); def tag = hostTagProvider.get()
-            if (!ndk || !tag) throw new GradleException("NDK not found. Ensure ndkVersion ${android.ndkVersion} is installed.")
+            def ndk = ndkDirProvider.getOrNull()
+            def tag = hostTagProvider.getOrNull()
+            if (!ndk || !tag) {
+                throw new GradleException(
+                        "NDK toolchain not found. Ensure ndkVersion ${android.ndkVersion} is installed " +
+                                "and that a matching host toolchain directory exists under " +
+                                "${android.ndkDirectory}/toolchains/llvm/prebuilt/."
+                )
+            }
 
             crossFile.parentFile.mkdirs()
             crossFile.text = """
