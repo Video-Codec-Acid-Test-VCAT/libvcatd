@@ -258,23 +258,7 @@ if (!ctx->ready.empty()) {
 frame = ctx->ready.front();
 ctx->ready.pop_front();
 } else {
-// Try to pop one without feeding
-for (;;) {
-vvdecFrame* f = nullptr;
-int r = vvdec_decode(ctx->dec, nullptr, &f);
-if (r == VVDEC_TRY_AGAIN) break;
-if (r != VVDEC_OK && r != VVDEC_EOF) {
-LOGE("vvdec_decode(pop) ret=%d", r);
-if (outWH && env->GetArrayLength(outWH) >= 2) {
-jint wh_err[2] = { -1, r };
-env->SetIntArrayRegion(outWH, 0, 2, wh_err);
-}
 return 0;
-}
-if (f) { frame = f; break; }
-if (r == VVDEC_EOF) break;
-}
-if (!frame) return 0;
 }
 
 auto* hold = new PictureHolder();
