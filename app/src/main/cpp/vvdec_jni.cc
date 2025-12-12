@@ -157,8 +157,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_
     vvdecParams p;
     vvdec_params_default(&p);
 
-    // vvdec displays black frames for threads > 3, for now force to 3
-    threads = (threads == 0) ? 1 : (threads > 3) ? 3 : threads;
+    threads = (threads == 0) ? 1 : threads;
 
     // Prefer a deterministic single-thread default for stability on low-RAM devices.
     p.threads = threads;
