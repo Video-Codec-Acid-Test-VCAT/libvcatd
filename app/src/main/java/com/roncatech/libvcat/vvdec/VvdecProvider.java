@@ -35,9 +35,11 @@ package com.roncatech.libvcat.vvdec;
 import android.content.Context;
 import android.os.Handler;
 
-import com.google.android.exoplayer2.Renderer;
-import com.google.android.exoplayer2.video.VideoRendererEventListener;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
 
+@UnstableApi
 public final class VvdecProvider implements VvdecRendererProvider {
     private final int threadCount;
 

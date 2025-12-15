@@ -35,8 +35,9 @@ package com.roncatech.libvcat.vvdec;
 import android.content.Context;
 import android.os.Handler;
 
-import com.google.android.exoplayer2.Renderer;
-import com.google.android.exoplayer2.video.VideoRendererEventListener;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
 
 /** Provider contract for a software VVC (H.266) renderer backed by vvdec. */
 public interface VvdecRendererProvider {
@@ -47,6 +48,7 @@ public interface VvdecRendererProvider {
     boolean isAvailable(Context context);
 
     /** Build the renderer or throw IllegalStateException for strict fail. */
+    @UnstableApi
     Renderer build(long allowedJoiningTimeMs,
                    Handler eventHandler,
                    VideoRendererEventListener eventListener);

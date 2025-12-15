@@ -1,8 +1,9 @@
 package com.roncatech.libvcat.vvdec;
 
-import com.google.android.exoplayer2.util.ParsableBitArray;
-import com.google.android.exoplayer2.util.ParsableByteArray;
-import com.google.android.exoplayer2.util.Util;
+
+import androidx.media3.common.util.ParsableBitArray;
+import androidx.media3.common.util.UnstableApi;
+
 import com.roncatech.libvcat.decoder.VideoConfiguration;
 
 import java.util.ArrayList;
@@ -23,6 +24,7 @@ public final class VvcVideoCfgParser {
         chars[3] = (char) (fourCc & 0xFF);
         return new String(chars);
     }
+    @UnstableApi
     public static VideoConfiguration parseStsd(byte[] data){
 
         ParsableBitArray reader = new ParsableBitArray(data);

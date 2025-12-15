@@ -1,6 +1,6 @@
 package com.roncatech.libvcat.decoder;
 
-import com.google.android.exoplayer2.util.ParsableByteArray;
+import androidx.media3.common.util.UnstableApi;
 
 public interface NonStdDecoderStsdParser {
 
@@ -8,5 +8,6 @@ public interface NonStdDecoderStsdParser {
     int codecConfiguration4ccCode();
     String mimeType();
 
+    @UnstableApi
     VideoConfiguration parseStsd(byte[] data);
 }

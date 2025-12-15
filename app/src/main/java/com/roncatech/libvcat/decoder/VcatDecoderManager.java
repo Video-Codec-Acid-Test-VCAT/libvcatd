@@ -1,5 +1,7 @@
 package com.roncatech.libvcat.decoder;
 
+import androidx.media3.common.util.UnstableApi;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -10,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /** Central registry for VCAT decoder plugins (last-wins). */
+@UnstableApi
 public final class VcatDecoderManager {
 
     private static final VcatDecoderManager INSTANCE = new VcatDecoderManager();

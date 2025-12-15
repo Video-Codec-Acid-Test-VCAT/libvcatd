@@ -32,22 +32,22 @@
 
 package com.roncatech.libvcat.vvdec;
 
-import android.util.Log;
 import android.view.Surface;
 
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.Format;
-import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
-import com.google.android.exoplayer2.decoder.DecoderOutputBuffer;
-import com.google.android.exoplayer2.decoder.SimpleDecoder;
-import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
-import java.nio.ByteBuffer;
+import androidx.media3.common.C;
+import androidx.media3.common.Format;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.decoder.DecoderException;
+import androidx.media3.decoder.DecoderInputBuffer;
+import androidx.media3.decoder.DecoderOutputBuffer;
+import androidx.media3.decoder.SimpleDecoder;
+import androidx.media3.decoder.VideoDecoderOutputBuffer;
 
+@UnstableApi
 final class VvdecDecoder
-        extends SimpleDecoder<DecoderInputBuffer, VvdecOutputBuffer, VvdecDecoderException> {
+        extends SimpleDecoder<DecoderInputBuffer, VvdecOutputBuffer, DecoderException> {
 
     // Local copies of 2.x buffer flags to avoid Media3 suggestions.
-    private static final int FLAG_DECODE_ONLY   = 0x1;
     private static final int FLAG_END_OF_STREAM = 0x4;
 
     private static final int NUM_INPUT_BUFFERS  = 8;
@@ -59,7 +59,7 @@ final class VvdecDecoder
     private Format inputFormat;
     private boolean eosSignaled = false;
 
-    VvdecDecoder(int threads) throws VvdecDecoderException {
+    VvdecDecoder(int threads) throws DecoderException {
         super(
                 new DecoderInputBuffer[NUM_INPUT_BUFFERS],
                 new VvdecOutputBuffer[NUM_OUTPUT_BUFFERS]);
@@ -68,7 +68,7 @@ final class VvdecDecoder
 
         nativeCtx = NativeVvdec.nativeCreate(this.threads);
         if (nativeCtx == 0) {
-            throw new VvdecDecoderException("nativeCreate failed");
+            throw new DecoderException("nativeCreate failed");
         }
     }
 
@@ -104,8 +104,8 @@ final class VvdecDecoder
     }
 
     @Override
-    protected VvdecDecoderException createUnexpectedDecodeException(Throwable error) {
-        return new VvdecDecoderException("Unexpected decode error", error);
+    protected DecoderException createUnexpectedDecodeException(Throwable error) {
+        return new DecoderException("Unexpected decode error", error);
     }
 
     @Override
@@ -130,56 +130,65 @@ final class VvdecDecoder
     }
 
     @Override
-    protected VvdecDecoderException decode(DecoderInputBuffer in,
-                                           VvdecOutputBuffer out,
-                                           boolean reset) {
-        if (nativeCtx == 0) return new VvdecDecoderException("Decoder released");
+    protected DecoderException decode(
+            DecoderInputBuffer in,
+            VvdecOutputBuffer out,
+            boolean reset) {
+
+        if (nativeCtx == 0) {
+            return new DecoderException("Decoder released");
+        }
+
         if (reset) {
             NativeVvdec.nativeFlush(nativeCtx);
             eosSignaled = false;
         }
-        final boolean decodeOnly = in.isDecodeOnly();
 
         // EOS path: signal EOF, try one drain; if none, set EOS flag.
         if (in.isEndOfStream()) {
             NativeVvdec.nativeSignalEof(nativeCtx);
             eosSignaled = true;
 
-            int[] wh = new int[2];
+            int[]  wh  = new int[2];
             long[] pts = new long[1];
             long h = NativeVvdec.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) return new VvdecDecoderException("vvdec dequeue failed: " + wh[1]);
+            if (wh[0] == -1) {
+                return new DecoderException("vvdec dequeue failed: " + wh[1]);
+            }
 
             if (h != 0) {
-                out.mode = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
+                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
                 out.timeUs = pts[0];
-                out.width = wh[0];
+                out.width  = wh[0];
                 out.height = wh[1];
                 out.format = inputFormat;
                 out.nativePic = h;
-                if (decodeOnly) out.addFlag(FLAG_DECODE_ONLY);
-                //return null;
             }
             out.addFlag(FLAG_END_OF_STREAM);
             return null;
         }
 
-        if (in.data == null) return new VvdecDecoderException("Input buffer has no data");
+        if (in.data == null) {
+            return new DecoderException("Input buffer has no data");
+        }
 
         // If the native queue is "full", try to drain first to make space.
         if (!NativeVvdec.nativeHasCapacity(nativeCtx)) {
-            int[] wh = new int[2]; long[] pts = new long[1];
+            int[]  wh  = new int[2];
+            long[] pts = new long[1];
             long h = NativeVvdec.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) return new VvdecDecoderException("vvdec dequeue failed: " + wh[1]);
+            if (wh[0] == -1) {
+                return new DecoderException("vvdec dequeue failed: " + wh[1]);
+            }
             if (h != 0) {
-                out.mode = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
+                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
                 out.timeUs = pts[0];
-                out.width = wh[0];
+                out.width  = wh[0];
                 out.height = wh[1];
                 out.format = inputFormat;
                 out.nativePic = h;
-                if (decodeOnly) out.addFlag(FLAG_DECODE_ONLY);
-                //return null;
+                // We’ve produced a frame; caller will handle buffer lifecycle.
+                return null;
             }
             // No frame yet; let upstream feed again later.
             return null;
@@ -191,22 +200,24 @@ final class VvdecDecoder
 
         if (rc != 0) {
             // Our JNI returns 0 on success, negative errno otherwise.
-            return new VvdecDecoderException("nativeQueueInput failed: " + rc);
+            return new DecoderException("nativeQueueInput failed: " + rc);
         }
 
         // Non-blocking drain attempt (vvdec may have produced one).
         {
-            int[] wh = new int[2]; long[] pts = new long[1];
+            int[]  wh  = new int[2];
+            long[] pts = new long[1];
             long h = NativeVvdec.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) return new VvdecDecoderException("vvdec dequeue failed: " + wh[1]);
+            if (wh[0] == -1) {
+                return new DecoderException("vvdec dequeue failed: " + wh[1]);
+            }
             if (h != 0) {
-                out.mode = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
+                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
                 out.timeUs = pts[0];
-                out.width = wh[0];
+                out.width  = wh[0];
                 out.height = wh[1];
                 out.format = inputFormat;
                 out.nativePic = h;
-                if (decodeOnly) out.addFlag(FLAG_DECODE_ONLY);
                 return null;
             }
         }
@@ -215,48 +226,18 @@ final class VvdecDecoder
     }
 
     /** Called by the renderer to blit the decoded frame to a Surface. */
-    void renderToSurface(VvdecOutputBuffer out) throws VvdecDecoderException {
-        if (nativeCtx == 0 || out.nativePic == 0) return;
+    void renderToSurface(VvdecOutputBuffer out) throws DecoderException {
+        if (nativeCtx == 0 || out.nativePic == 0) {
+            return;
+        }
         int rc = NativeVvdec.nativeRenderToSurface(nativeCtx, out.nativePic);
         if (rc < 0) {
-            throw new VvdecDecoderException("nativeRenderToSurface failed: " + rc);
+            throw new DecoderException("nativeRenderToSurface failed: " + rc);
         }
     }
 
     // Get the vvdec decoder version string (e.g., "3.0.0").
     public static native String vvdecGetVersion();
 
-    /*// Creates a decoder context; returns 0 on failure.
-    public static native long nativeCreate(int threads);
-
-    // Flushes decoder state (drains/clears internal queues).
-    public static native void nativeFlush(long ctx);
-
-    // Destroys the decoder context and frees resources.
-    public static native void nativeClose(long ctx);
-
-    public static native boolean nativeHasCapacity(long ctx);
-    public static native void    nativeSignalEof(long ctx);
-
-    // Queues one compressed sample (direct ByteBuffer required).
-    // Returns 0 on success; negative errno on error (e.g., -22 for EINVAL).
-    public static native int nativeQueueInput(
-        long ctx, ByteBuffer buffer, int offset, int size, long ptsUs);
-
-    // Attempts to dequeue a decoded frame.
-    // Returns 0 if no frame yet; otherwise a non-zero native handle.
-    // outWidthHeight[0]=w, [1]=h; outPtsUs[0]=pts.
-    public static native long nativeDequeueFrame(
-        long ctx, int[] outWidthHeight, long[] outPtsUs);
-
-    // Renders a decoded frame to the current Surface (YV12 blit in JNI).
-    // Returns 0 on success; negative on error.
-    public static native int nativeRenderToSurface(long ctx, long nativePic);
-
-    // Releases a previously dequeued native picture handle.
-    public static native void nativeReleasePicture(long ctx, long nativePic);
-
-
-    // Binds/unbinds the output Surface (cached as ANativeWindow in JNI).
-    public static native void nativeSetSurface(long handle, Surface surface);*/
+    // (Other JNI methods are implemented in NativeVvdec.)
 }

@@ -2,13 +2,15 @@ package com.roncatech.libvcat.decoder;
 
 import androidx.annotation.Nullable;
 
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.Format;
-import com.google.android.exoplayer2.util.MimeTypes;
+import androidx.media3.common.C;
+import androidx.media3.common.Format;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.common.util.UnstableApi;
 
 import java.util.ArrayList;
 import java.util.List;
 
+@UnstableApi
 public class VideoConfiguration {
     public final String mimeType;
     public final int nalUnitLengthFieldLength;

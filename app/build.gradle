@@ -343,11 +343,18 @@ tasks.register('publishLocal') {
 }
 
 /* ===== Dependencies ===== */
+def media3Version = "1.8.0"
+
 dependencies {
     compileOnly "androidx.annotation:annotation:1.7.1"
-    compileOnly "com.google.android.exoplayer:exoplayer-core:2.19.1"
+
+    // ExoPlayer 2 -> Media3 ExoPlayer
+    compileOnly "androidx.media3:media3-exoplayer:$media3Version"
+
     implementation "org.checkerframework:checker-compat-qual:2.5.5" // provides @NullableType
     implementation "com.google.guava:guava:32.1.3-android"           // AtomParsers uses ImmutableList/Ints
+
     testImplementation 'junit:junit:4.13.2'
-    testImplementation "com.google.android.exoplayer:exoplayer-core:2.19.1"
+    testImplementation "androidx.media3:media3-exoplayer:$media3Version"
 }
+

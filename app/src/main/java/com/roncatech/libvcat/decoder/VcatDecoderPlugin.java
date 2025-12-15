@@ -4,9 +4,10 @@ import android.content.Context;
 import android.graphics.ImageDecoder;
 import android.os.Handler;
 
-import com.google.android.exoplayer2.Renderer;
-import com.google.android.exoplayer2.video.VideoRendererEventListener;
-import com.google.android.exoplayer2.decoder.DecoderException;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.decoder.DecoderException;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
 
 import java.util.Collections;
 import java.util.List;
@@ -33,6 +34,7 @@ public interface VcatDecoderPlugin {
      * @param threads Required worker thread count (>= 1).
      * @return Renderer instance, or null if unavailable.
      */
+    @UnstableApi
     Renderer createVideoRenderer(
             Context context,
             long allowedJoiningTimeMs,

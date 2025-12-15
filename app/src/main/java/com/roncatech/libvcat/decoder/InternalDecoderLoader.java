@@ -1,5 +1,7 @@
 package com.roncatech.libvcat.decoder;
 
+import androidx.media3.common.util.UnstableApi;
+
 import com.roncatech.libvcat.dav1d.VcatDav1dPlugin;
 import com.roncatech.libvcat.vvdec.VcatVvcdecPlugin;
 import com.roncatech.libvcat.vvdec.VvdecProvider;
@@ -8,6 +10,8 @@ import com.roncatech.libvcat.vvdec.VvdecProvider;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Registers libvcat's built-in decoders (opaque to callers). */
+
+@UnstableApi
 final class InternalDecoderLoader {
     private static final AtomicBoolean didLoad = new AtomicBoolean(false);
 

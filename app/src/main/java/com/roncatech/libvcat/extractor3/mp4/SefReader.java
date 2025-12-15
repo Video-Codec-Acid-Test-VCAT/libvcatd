@@ -13,20 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.roncatech.libvcat.extractor.mp4;
+package com.roncatech.libvcat.extractor3.mp4;
 
-import static com.google.android.exoplayer2.extractor.Extractor.RESULT_SEEK;
+import static androidx.media3.extractor.Extractor.RESULT_SEEK;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
 import androidx.annotation.IntDef;
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.ParserException;
-import com.google.android.exoplayer2.extractor.Extractor;
-import com.google.android.exoplayer2.extractor.ExtractorInput;
-import com.google.android.exoplayer2.extractor.PositionHolder;
-import com.google.android.exoplayer2.metadata.Metadata;
-import com.google.android.exoplayer2.metadata.mp4.SlowMotionData;
-import com.google.android.exoplayer2.util.ParsableByteArray;
+import androidx.media3.common.C;
+import androidx.media3.common.Metadata;
+import androidx.media3.common.ParserException;
+import androidx.media3.common.util.ParsableByteArray;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.extractor.Extractor;
+import androidx.media3.extractor.ExtractorInput;
+import androidx.media3.extractor.PositionHolder;
+import androidx.media3.extractor.metadata.mp4.SlowMotionData;
 import com.google.common.base.Splitter;
 import java.io.IOException;
 import java.lang.annotation.Documented;
@@ -39,15 +40,11 @@ import java.util.List;
 /**
  * Reads Samsung Extension Format (SEF) metadata.
  *
- * <p>To be used in conjunction with {@link VcatMp4Extractor}.
- *
- * @deprecated com.google.android.exoplayer2 is deprecated. Please migrate to androidx.media3 (which
- *     contains the same ExoPlayer code). See <a
- *     href="https://developer.android.com/guide/topics/media/media3/getting-started/migration-guide">the
- *     migration guide</a> for more details, including a script to help with the migration.
+ * <p>To be used in conjunction with {@link VcatMp4Extractor3}.
  */
-@Deprecated
-/* package */ final class SefReader {
+/* package */
+@UnstableApi
+final class SefReader {
 
   /** Reader states. */
   @Documented
@@ -88,13 +85,15 @@ import java.util.List;
   private static final String TAG = "SefReader";
 
   /**
-   * Hex representation of `SEFT` (in ASCII).
+   * Integer representation of {@code SEFT} (in ASCII).
    *
    * <p>This is the last 4 bytes of a file that has Samsung Extension Format (SEF) data.
    */
   private static final int SAMSUNG_TAIL_SIGNATURE = 0x53454654;
+
   /** Start signature (4 bytes), SEF version (4 bytes), SDR count (4 bytes). */
   private static final int TAIL_HEADER_LENGTH = 12;
+
   /** Tail offset (4 bytes), tail signature (4 bytes). */
   private static final int TAIL_FOOTER_LENGTH = 8;
 

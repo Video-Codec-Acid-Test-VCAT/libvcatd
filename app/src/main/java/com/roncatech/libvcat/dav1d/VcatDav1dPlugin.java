@@ -3,15 +3,18 @@ package com.roncatech.libvcat.dav1d;
 import android.content.Context;
 import android.os.Handler;
 
-import com.google.android.exoplayer2.Renderer;
-import com.google.android.exoplayer2.decoder.DecoderException;
-import com.google.android.exoplayer2.video.VideoRendererEventListener;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.decoder.DecoderException;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
+
 import com.roncatech.libvcat.decoder.VcatDecoderPlugin;
 
 /**
  * VCAT AV1 plugin backed by dav1d.
- * ID: vcat-dav1d
+ * ID: vcat.dav1d
  */
+@UnstableApi
 public final class VcatDav1dPlugin implements VcatDecoderPlugin {
 
     @Override

@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.roncatech.libvcat.extractor.mp4;
-@Deprecated
+package com.roncatech.libvcat.extractor3.mp4;
+
 /* package */ final class DefaultSampleValues {
 
   public final int sampleDescriptionIndex;

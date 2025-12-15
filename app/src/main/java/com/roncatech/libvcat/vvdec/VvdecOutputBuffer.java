@@ -32,8 +32,10 @@
 
 package com.roncatech.libvcat.vvdec;
 
-import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.decoder.VideoDecoderOutputBuffer;
 
+@UnstableApi
 final class VvdecOutputBuffer extends VideoDecoderOutputBuffer {
     /** Native handle to a held vvdecFrame (0 when none). */
     long nativePic;

@@ -35,21 +35,23 @@ import android.os.Handler;
 import android.util.Log;
 import android.view.Surface;
 
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.Format;
-import com.google.android.exoplayer2.RendererCapabilities;
-import com.google.android.exoplayer2.decoder.CryptoConfig; // ExoPlayer 2.x
-import com.google.android.exoplayer2.decoder.Decoder;
-import com.google.android.exoplayer2.decoder.DecoderException;
-import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
-import com.google.android.exoplayer2.decoder.DecoderReuseEvaluation;
-import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
-import com.google.android.exoplayer2.video.DecoderVideoRenderer;
-import com.google.android.exoplayer2.video.VideoRendererEventListener;
+import androidx.media3.common.C;
+import androidx.media3.common.Format;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.decoder.CryptoConfig;
+import androidx.media3.decoder.Decoder;
+import androidx.media3.decoder.DecoderException;
+import androidx.media3.decoder.DecoderInputBuffer;
+import androidx.media3.decoder.VideoDecoderOutputBuffer;
+import androidx.media3.exoplayer.DecoderReuseEvaluation;
+import androidx.media3.exoplayer.RendererCapabilities;
+import androidx.media3.exoplayer.video.DecoderVideoRenderer;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
 
 /**
  * Software VVC (H.266) renderer using vvdec via JNI, patterned after the dav1d path.
  */
+@UnstableApi
 public final class VvdecVideoRenderer extends DecoderVideoRenderer {
 
     private static final String TAG = "VvdecVideoRenderer";
@@ -75,11 +77,14 @@ public final class VvdecVideoRenderer extends DecoderVideoRenderer {
         this.threads = Math.max(1, threads);
     }
 
-    @Override public String getName() { return "VvdecVideoRenderer"; }
+    @Override
+    public String getName() {
+        return "VvdecVideoRenderer";
+    }
 
     @Override
     protected Decoder<DecoderInputBuffer, ? extends VideoDecoderOutputBuffer, ? extends DecoderException>
-    createDecoder(Format format, CryptoConfig cryptoConfig) throws VvdecDecoderException {
+    createDecoder(Format format, CryptoConfig cryptoConfig) throws DecoderException {
         VvdecLibrary.load();
         this.decoder = new VvdecDecoder(threads);
         if (this.currentSurface != null) {
@@ -93,9 +98,9 @@ public final class VvdecVideoRenderer extends DecoderVideoRenderer {
     @Override
     protected void renderOutputBufferToSurface(
             VideoDecoderOutputBuffer outputBuffer, Surface surface)
-            throws VvdecDecoderException {
+            throws DecoderException {
         if (decoder == null) {
-            throw new VvdecDecoderException(
+            throw new DecoderException(
                     "Failed to render output buffer to surface: decoder is not initialized.");
         }
         if (surface != currentSurface) {
@@ -107,13 +112,17 @@ public final class VvdecVideoRenderer extends DecoderVideoRenderer {
         outputBuffer.release();
     }
 
-    private static String videoOutputModeStr(int outputMode){
-        switch (outputMode){
-            case C.VIDEO_OUTPUT_MODE_YUV: return "VIDEO_OUTPUT_MODE_YUV";
-            case C.VIDEO_OUTPUT_MODE_SURFACE_YUV: return "VIDEO_OUTPUT_MODE_SURFACE_YUV";
-            case C.VIDEO_OUTPUT_MODE_NONE: return "VIDEO_OUTPUT_MODE_NONE";
+    private static String videoOutputModeStr(int outputMode) {
+        switch (outputMode) {
+            case C.VIDEO_OUTPUT_MODE_YUV:
+                return "VIDEO_OUTPUT_MODE_YUV";
+            case C.VIDEO_OUTPUT_MODE_SURFACE_YUV:
+                return "VIDEO_OUTPUT_MODE_SURFACE_YUV";
+            case C.VIDEO_OUTPUT_MODE_NONE:
+                return "VIDEO_OUTPUT_MODE_NONE";
+            default:
+                return "UNKNOWN";
         }
-        return "UNKNOWN";
     }
 
     @Override
@@ -127,7 +136,8 @@ public final class VvdecVideoRenderer extends DecoderVideoRenderer {
                 return;
             default:
                 throw new IllegalArgumentException(
-                        "Surface output mode (" + videoOutputModeStr(outputMode) + ") not supported by vvdec");
+                        "Surface output mode (" + videoOutputModeStr(outputMode)
+                                + ") not supported by vvdec");
         }
     }
 
@@ -135,8 +145,11 @@ public final class VvdecVideoRenderer extends DecoderVideoRenderer {
     protected DecoderReuseEvaluation canReuseDecoder(String name, Format oldF, Format newF) {
         // Re-init on format change (simplest + safest for benchmarking).
         return new DecoderReuseEvaluation(
-                name, oldF, newF,
-                DecoderReuseEvaluation.REUSE_RESULT_NO, /* discardReasons */ 0);
+                name,
+                oldF,
+                newF,
+                DecoderReuseEvaluation.REUSE_RESULT_NO,
+                0 /* discardReasons */);
     }
 
     @Override
@@ -145,7 +158,7 @@ public final class VvdecVideoRenderer extends DecoderVideoRenderer {
 
         Log.i(TAG, "supportsFormat check for " + mime);
 
-        // ExoPlayer 2.x doesn’t define a constant for VVC; accept common strings.
+        // Media3/Exo still don't define a constant for VVC; accept common strings.
         final boolean isVvc = "video/vvc".equals(mime) || "video/h266".equals(mime);
         if (!isVvc) {
             return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_TYPE);

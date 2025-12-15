@@ -29,14 +29,17 @@
  *
  * Contact: legal@roncatech.com
  */
-
 package com.roncatech.libvcat.dav1d;
 
 import android.content.Context;
 import android.os.Handler;
-import com.google.android.exoplayer2.Renderer;
-import com.google.android.exoplayer2.video.VideoRendererEventListener;
- final class Dav1dAv1Provider implements Dav1dAv1RendererProvider {
+
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
+
+@UnstableApi
+final class Dav1dAv1Provider implements Dav1dAv1RendererProvider {
     private final int frameThreads, tileThreads;
 
     public Dav1dAv1Provider(int frameThreads, int tileThreads) {
@@ -44,9 +47,13 @@ import com.google.android.exoplayer2.video.VideoRendererEventListener;
         this.tileThreads  = Math.max(1, tileThreads);
     }
 
-    @Override public String id() { return "dav1d"; }
+    @Override
+    public String id() {
+        return "dav1d";
+    }
 
-    @Override public boolean isAvailable(Context context) {
+    @Override
+    public boolean isAvailable(Context context) {
         try {
             Dav1dLibrary.load(); // will throw UnsatisfiedLinkError if lib missing
             return true;

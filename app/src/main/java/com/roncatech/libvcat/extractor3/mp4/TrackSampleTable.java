@@ -13,38 +13,38 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.roncatech.libvcat.extractor.mp4;
+package com.roncatech.libvcat.extractor3.mp4;
 
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.extractor.mp4.Track;
-import com.google.android.exoplayer2.util.Assertions;
-import com.google.android.exoplayer2.util.Util;
+import androidx.media3.common.C;
+import androidx.media3.common.util.Assertions;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.common.util.Util;
 
-/**
- * Sample table for a track in an MP4 file.
- *
- * @deprecated com.google.android.exoplayer2 is deprecated. Please migrate to androidx.media3 (which
- *     contains the same ExoPlayer code). See <a
- *     href="https://developer.android.com/guide/topics/media/media3/getting-started/migration-guide">the
- *     migration guide</a> for more details, including a script to help with the migration.
- */
-@Deprecated
-/* package */ final class TrackSampleTable {
+/** Sample table for a track in an MP4 file. */
+@UnstableApi
+public final class TrackSampleTable {
 
   /** The track corresponding to this sample table. */
   public final Track track;
+
   /** Number of samples. */
   public final int sampleCount;
+
   /** Sample offsets in bytes. */
   public final long[] offsets;
+
   /** Sample sizes in bytes. */
   public final int[] sizes;
+
   /** Maximum sample size in {@link #sizes}. */
   public final int maximumSize;
+
   /** Sample timestamps in microseconds. */
   public final long[] timestampsUs;
+
   /** Sample flags. */
   public final int[] flags;
+
   /** The duration of the track sample table in microseconds. */
   public final long durationUs;
 
