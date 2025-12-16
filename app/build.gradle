@@ -10,7 +10,7 @@ plugins {
 }
 
 group   = 'com.roncatech.vcat'
-def baseVersion = '0.0.2.3'
+def baseVersion = '0.1.0.0'
 def localSuffix = (findProperty('localVersionSuffix') ?: '')
 version = baseVersion + localSuffix   // e.g. -PlocalVersionSuffix=-local
 
