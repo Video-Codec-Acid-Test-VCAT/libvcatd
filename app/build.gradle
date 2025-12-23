@@ -3,6 +3,8 @@
 * (license header unchanged)
 */
 
+import org.gradle.internal.os.OperatingSystem
+
 plugins {
     id 'com.android.library'
     id 'maven-publish'
@@ -10,12 +12,13 @@ plugins {
 }
 
 group   = 'com.roncatech.vcat'
-def baseVersion = '0.0.2.3'
+def baseVersion = '0.0.3.0'
 def localSuffix = (findProperty('localVersionSuffix') ?: '')
 version = baseVersion + localSuffix   // e.g. -PlocalVersionSuffix=-local
 
 def abis      = ['arm64-v8a','armeabi-v7a']
-def vvdecAbis = ['arm64-v8a','armeabi-v7a']          // vvdec arm64 only
+// vvdec: build BOTH ABIs to match the CMake/JNI build (this keeps CLI + publish stable).
+def vvdecAbis = ['arm64-v8a','armeabi-v7a']
 def minApi    = 29
 
 android {
@@ -72,39 +75,121 @@ android {
     }
 }
 
-/* ===== dav1d build (Meson/Ninja) ===== */
+/* =============================================================================
+ * Tooling (Option A): Use Android SDK CMake/Ninja + project-local Meson via Python
+ * ============================================================================= */
 
-def ndkDirProvider  = providers.provider { android.ndkDirectory?.absolutePath }
-// Add Windows host tag and avoid hard failure on null
-def hostTagProvider = providers.provider {
-    def ndk = ndkDirProvider.getOrNull()
-    if (!ndk) return null
+def os = OperatingSystem.current()
+def isWindows = os.isWindows()
+def exe = { String n -> isWindows ? "${n}.exe" : n }
+def cmdExt = isWindows ? ".cmd" : ""
 
-    // Known NDK host tags
-    def tags = ['darwin-arm64','darwin-x86_64','linux-x86_64','windows-x86_64']
+// Allow overrides:
+//   -Ppython=/path/to/python
+//   -Pcmake=/path/to/cmake
+//   -Pninja=/path/to/ninja
+def pythonCmd = (findProperty("python") ?: (isWindows ? "python" : "python3")) as String
 
-    return tags.find { tag ->
-        file("${ndk}/toolchains/llvm/prebuilt/${tag}/bin").exists()
+// Find highest installed Android SDK CMake version under $SDK/cmake/<ver>/bin
+def compareVersions = { String a, String b ->
+    def pa = a.tokenize('.-').collect { it.isInteger() ? it.toInteger() : 0 }
+    def pb = b.tokenize('.-').collect { it.isInteger() ? it.toInteger() : 0 }
+    def n = Math.max(pa.size(), pb.size())
+    for (int i=0; i<n; i++) {
+        def va = (i < pa.size()) ? pa[i] : 0
+        def vb = (i < pb.size()) ? pb[i] : 0
+        if (va != vb) return va <=> vb
+    }
+    return 0
+}
+
+def sdkDir = android.sdkDirectory
+def cmakeBinDirProvider = providers.provider {
+    def cmakeRoot = new File(sdkDir, "cmake")
+    if (!cmakeRoot.exists()) return null
+    def vers = cmakeRoot.listFiles()?.findAll { it.isDirectory() && new File(it, "bin").isDirectory() } ?: []
+    if (vers.isEmpty()) return null
+    vers.sort { x, y -> compareVersions(x.name, y.name) }
+    def best = vers.last()
+    def bin = new File(best, "bin")
+    return bin.exists() ? bin : null
+}
+
+def cmakeCmd = (findProperty("cmake") ?: providers.provider {
+    def bin = cmakeBinDirProvider.getOrNull()
+    return bin ? new File(bin, exe("cmake")).absolutePath : null
+}.getOrNull()) as String
+
+def ninjaCmd = (findProperty("ninja") ?: providers.provider {
+    def bin = cmakeBinDirProvider.getOrNull()
+    return bin ? new File(bin, exe("ninja")).absolutePath : null
+}.getOrNull()) as String
+
+def requireSdkCmake = {
+    if (!cmakeCmd || !file(cmakeCmd).exists()) {
+        throw new GradleException(
+                "CMake not found in Android SDK.\n" +
+                        "Install it via Android Studio → SDK Manager → SDK Tools → CMake,\n" +
+                        "or pass -Pcmake=/absolute/path/to/cmake"
+        )
+    }
+    if (!ninjaCmd || !file(ninjaCmd).exists()) {
+        throw new GradleException(
+                "Ninja not found (normally bundled with Android SDK CMake).\n" +
+                        "Install CMake via SDK Manager or pass -Pninja=/absolute/path/to/ninja"
+        )
     }
 }
 
-// Cross-platform command suffixes
-def isWindows = System.getProperty("os.name").toLowerCase().contains("windows")
-def cmdExt  = isWindows ? ".cmd" : ""
-def exeExt  = isWindows ? ".exe" : ""
-def mesonCmd = isWindows ? "meson.exe" : "meson"
+def hostPythonPkgsDir = layout.buildDirectory.dir("host-python-pkgs").get().asFile
+
+tasks.register("ensureMeson") {
+    outputs.dir(hostPythonPkgsDir)
+    doLast {
+        hostPythonPkgsDir.mkdirs()
+        exec {
+            commandLine pythonCmd, "-m", "pip", "install", "--upgrade",
+                    "--target", hostPythonPkgsDir.absolutePath,
+                    "meson"
+        }
+    }
+}
+
+def mesonModuleCommandLine = { List<String> args ->
+    [pythonCmd, "-m", "mesonbuild.mesonmain"] + args
+}
+
+def withMesonEnv = { spec ->
+    def pyPath = hostPythonPkgsDir.absolutePath + File.pathSeparator + (System.getenv("PYTHONPATH") ?: "")
+    spec.environment "PYTHONPATH", pyPath
+
+    // Meson invokes "ninja" by name; ensure SDK ninja is on PATH
+    def cmBin = cmakeBinDirProvider.getOrNull()
+    if (cmBin != null) {
+        def path = cmBin.absolutePath + File.pathSeparator + (System.getenv("PATH") ?: "")
+        spec.environment "PATH", path
+    }
+}
+
+/* ===== dav1d build (Meson/Ninja) ===== */
+
+def ndkDirProvider  = providers.provider { android.ndkDirectory?.absolutePath }
+def hostTagProvider = providers.provider {
+    def ndk = ndkDirProvider.getOrNull()
+    if (!ndk) return null
+    def tags = ['darwin-arm64','darwin-x86_64','linux-x86_64','windows-x86_64']
+    return tags.find { tag -> file("${ndk}/toolchains/llvm/prebuilt/${tag}/bin").exists() }
+}
 
 def triplet = { abi -> abi == 'arm64-v8a' ? 'aarch64-linux-android' : 'armv7a-linux-androideabi' }
 def ccFor   = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang${cmdExt}" }
 def cxxFor  = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang++${cmdExt}" }
-def arFor   = { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-ar${exeExt}" }
-def stripFor = { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-strip${exeExt}" }
 
 def dav1dWorkRoot = layout.buildDirectory.dir('dav1d').get().asFile
 def dav1dSrcDir   = new File(dav1dWorkRoot, 'src')
 def dav1dRef      = (findProperty('dav1dRef') ?: '1.5.1') as String
 def dav1dRemote   = (findProperty('dav1dRemote') ?: 'https://code.videolan.org/videolan/dav1d.git') as String
-def dav1dLocal    = (findProperty('DAV1D_SRC') ?: System.getenv('DAV1D_SRC')) as String // optional override
+def dav1dLocal    = (findProperty('DAV1D_SRC') ?: System.getenv('DAV1D_SRC')) as String
 
 tasks.register('fetchDav1d') {
     outputs.dir(dav1dSrcDir)
@@ -159,8 +244,8 @@ abis.each { abi ->
 [binaries]
 c = '${ccFor(abi, ndk, tag)}'
 cpp = '${cxxFor(abi, ndk, tag)}'
-ar = '${arFor(ndk, tag)}'
-strip = '${stripFor(ndk, tag)}'
+ar = '${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-ar${isWindows ? ".exe" : ""}'
+strip = '${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-strip${isWindows ? ".exe" : ""}'
 pkg-config = 'false'
 
 [built-in options]
@@ -179,20 +264,29 @@ endian = 'little'
     }
 
     tasks.register("buildDav1d_${abi}") {
-        dependsOn "genCrossFile_${abi}"
+        dependsOn "genCrossFile_${abi}", "ensureMeson"
         outputs.dir(installDir)
         doLast {
+            requireSdkCmake()
+
             buildDir.mkdirs(); installDir.mkdirs()
+
             exec {
                 workingDir buildDir
-                commandLine mesonCmd, 'setup', '.', dav1dSrcDir.absolutePath,
+                withMesonEnv(delegate)
+                commandLine mesonModuleCommandLine([
+                        'setup', '.', dav1dSrcDir.absolutePath,
                         '--cross-file', crossFile.absolutePath,
-                        '-Ddefault_library=static','-Denable_asm=true',
-                        '-Denable_tests=false','-Dbuildtype=release',
+                        '-Ddefault_library=static',
+                        '-Denable_asm=true',
+                        '-Denable_tests=false',
+                        '-Dbuildtype=release',
                         '--prefix', installDir.absolutePath
+                ])
             }
-            exec { workingDir buildDir; commandLine 'ninja' }
-            exec { workingDir buildDir; commandLine 'ninja','install' }
+
+            exec { workingDir buildDir; withMesonEnv(delegate); commandLine ninjaCmd }
+            exec { workingDir buildDir; withMesonEnv(delegate); commandLine ninjaCmd, 'install' }
         }
     }
 }
@@ -241,25 +335,35 @@ vvdecAbis.each { abi ->
         dependsOn 'fetchVvdec'
         outputs.dir(installDir)
         doLast {
+            requireSdkCmake()
+
             buildDir.mkdirs(); installDir.mkdirs()
             def ndk = android.ndkDirectory?.absolutePath
             if (!ndk) throw new GradleException("NDK not found. Ensure ndkVersion ${android.ndkVersion} is installed.")
 
             exec {
                 workingDir buildDir
-                commandLine 'cmake',
-                        '-G','Ninja',
-                        "-D","CMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake",
-                        "-D","ANDROID_ABI=${abi}",
-                        "-D","ANDROID_PLATFORM=android-${minApi}",
-                        "-D","CMAKE_BUILD_TYPE=Release",
-                        "-D","BUILD_SHARED_LIBS=OFF",
-                        "-D","VVDEC_ENABLE_TRACING=OFF",
-                        "-D","CMAKE_INSTALL_PREFIX=${installDir.absolutePath}",
+                commandLine cmakeCmd,
+                        '-G', 'Ninja',
+                        "-DCMAKE_MAKE_PROGRAM=${ninjaCmd}",
+                        "-DCMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake",
+                        "-DANDROID_ABI=${abi}",
+                        "-DANDROID_PLATFORM=android-${minApi}",
+                        "-DCMAKE_BUILD_TYPE=Release",
+                        "-DBUILD_SHARED_LIBS=OFF",
+                        "-DVVDEC_ENABLE_TRACING=OFF",
+
+                        // Critical: don't build vvdecapp / examples / tests when cross-compiling
+                        "-DVVDEC_BUILD_APPS=OFF",
+                        "-DVVDEC_BUILD_EXAMPLES=OFF",
+                        "-DVVDEC_BUILD_TESTS=OFF",
+                        "-DBUILD_TESTING=OFF",
+
+                        "-DCMAKE_INSTALL_PREFIX=${installDir.absolutePath}",
                         vvdecSrcDir.absolutePath
             }
-            exec { workingDir buildDir; commandLine 'ninja' }
-            exec { workingDir buildDir; commandLine 'ninja','install' }
+            exec { workingDir buildDir; commandLine ninjaCmd }
+            exec { workingDir buildDir; commandLine ninjaCmd, 'install' }
         }
     }
 }
@@ -283,18 +387,8 @@ publishing {
             artifactId = 'libvcat'
             version    = project.version
 
-            // Map Android variants into publications.
             afterEvaluate {
-                def publishAll = (findProperty('publishAllVariants') ?: 'false').toBoolean()
-                if (publishAll) {
-                    from(components.getByName('release'))
-                    if (components.findByName('debug') != null) {
-                        // Optional: also create a debug publication if you want it separately.
-                        // For simplicity we keep one publication; release AAR is usually enough.
-                    }
-                } else {
-                    from(components.getByName('release'))
-                }
+                from(components.getByName('release'))
             }
 
             artifact(tasks.named('androidJavadocJar'))
@@ -339,6 +433,23 @@ tasks.register('publishLocal') {
     dependsOn 'publishToMavenLocal'
     doLast {
         println "Published: ~/.m2/repository/com/roncatech/vcat/libvcat/${project.version}/libvcat-${project.version}.aar"
+    }
+}
+
+/* ===== Auto-publish to MavenLocal after common Android Studio builds =====
+ *
+ * Android Studio typically runs assembleDebug / assemble / build.
+ * We finalize those tasks with publishToMavenLocal so ~/.m2 stays up-to-date.
+ *
+ * Disable with: -PautoPublishMavenLocal=false
+ */
+def autoPublishMavenLocal = (findProperty('autoPublishMavenLocal') ?: 'true').toBoolean()
+if (autoPublishMavenLocal) {
+    def publishM2 = tasks.named("publishToMavenLocal")
+    tasks.matching { t ->
+        t.name in ["assemble", "build", "assembleDebug", "assembleRelease"]
+    }.configureEach { t ->
+        t.finalizedBy(publishM2)
     }
 }
 
