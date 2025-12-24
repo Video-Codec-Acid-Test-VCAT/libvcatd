@@ -12,7 +12,7 @@ plugins {
 }
 
 group   = 'com.roncatech.vcat'
-def baseVersion = '0.0.3.0'
+def baseVersion = '0.0.3.1'
 def localSuffix = (findProperty('localVersionSuffix') ?: '')
 version = baseVersion + localSuffix   // e.g. -PlocalVersionSuffix=-local
 
@@ -341,32 +341,41 @@ vvdecAbis.each { abi ->
             def ndk = android.ndkDirectory?.absolutePath
             if (!ndk) throw new GradleException("NDK not found. Ensure ndkVersion ${android.ndkVersion} is installed.")
 
-            exec {
-                workingDir buildDir
-                commandLine cmakeCmd,
-                        '-G', 'Ninja',
-                        "-DCMAKE_MAKE_PROGRAM=${ninjaCmd}",
-                        "-DCMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake",
-                        "-DANDROID_ABI=${abi}",
-                        "-DANDROID_PLATFORM=android-${minApi}",
-                        "-DCMAKE_BUILD_TYPE=Release",
-                        "-DBUILD_SHARED_LIBS=OFF",
-                        "-DVVDEC_ENABLE_TRACING=OFF",
+            def args = [
+                    '-G', 'Ninja',
+                    "-DCMAKE_MAKE_PROGRAM=${ninjaCmd}",
+                    "-DCMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake",
+                    "-DANDROID_ABI=${abi}",
+                    "-DANDROID_PLATFORM=android-${minApi}",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DBUILD_SHARED_LIBS=OFF",
+                    "-DVVDEC_ENABLE_TRACING=OFF",
 
-                        // Critical: don't build vvdecapp / examples / tests when cross-compiling
-                        "-DVVDEC_BUILD_APPS=OFF",
-                        "-DVVDEC_BUILD_EXAMPLES=OFF",
-                        "-DVVDEC_BUILD_TESTS=OFF",
-                        "-DBUILD_TESTING=OFF",
+                    // Important: stop CMake IPO/LTO (often what triggers -fuse-ld=gold)
+                    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF",
 
-                        "-DCMAKE_INSTALL_PREFIX=${installDir.absolutePath}",
-                        vvdecSrcDir.absolutePath
+                    "-DCMAKE_INSTALL_PREFIX=${installDir.absolutePath}",
+                    vvdecSrcDir.absolutePath
+            ]
+
+            // Windows host: force lld so gold is never selected
+            if (isWindows) {
+                args.addAll([
+                        "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld",
+                        "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld",
+                        "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
+                ])
             }
+
+            exec { workingDir buildDir; commandLine(([cmakeCmd] + args) as List<String>) }
+
+            // Build + install
             exec { workingDir buildDir; commandLine ninjaCmd }
             exec { workingDir buildDir; commandLine ninjaCmd, 'install' }
         }
     }
 }
+
 
 /* ===== Ensure native deps exist before JNI configure ===== */
 
