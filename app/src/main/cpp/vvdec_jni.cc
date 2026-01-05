@@ -27,7 +27,7 @@
  */
 
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Minimal JNI bridge for vvdec mirroring the dav1d pattern.
+// Minimal JNI bridge for vvdec following the dav1d pattern closely.
 
 #include <jni.h>
 #include <android/log.h>
@@ -53,8 +53,6 @@ extern "C" {
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 
 static constexpr size_t kMaxPendingPackets = 16;
-static constexpr int kMaxDrainPerCall = 8;
-static constexpr uint64_t kMagic = 0x5643565644454341ULL; // "VCVVDECA" (arbitrary guard)
 
 struct InputNode {
     vvdecAccessUnit* au = nullptr;
@@ -71,15 +69,9 @@ struct InputNode {
 };
 
 struct NativeCtx {
-    uint64_t magic = kMagic;
-
     vvdecDecoder* dec = nullptr;
-
-    // Protects all vvdec_* calls and pending/ready state transitions.
-    std::mutex dec_mtx;
-
-    std::deque<InputNode*> pending;       // AUs created (freed after feeding)
-    std::deque<vvdecFrame*> ready;        // frames produced by vvdec_decode()/flush
+    std::deque<InputNode*> pending;  // Input AUs waiting to be fed
+    std::deque<vvdecFrame*> ready;   // Decoded frames waiting to be dequeued
 
     // Stats
     uint32_t pkts_in_total = 0;
@@ -87,17 +79,16 @@ struct NativeCtx {
     uint32_t pkts_send_tryagain = 0;
     uint32_t pkts_send_err = 0;
     uint32_t pics_out = 0;
-    uint32_t pics_tryagain = 0;
     uint32_t dropped_at_flush = 0;
 
-    int num_frames_decoded   = 0;
+    int num_frames_decoded = 0;
     int num_frames_displayed = 0;
     int num_frames_not_decoded = 0;
 
-    int64_t last_in_pts  = -1;
+    int64_t last_in_pts = -1;
     int64_t last_out_pts = -1;
 
-    // Surface
+    // Surface (only this needs mutex)
     ANativeWindow* win = nullptr;
     int win_w = 0, win_h = 0, win_fmt = 0;
     std::mutex win_mtx;
@@ -106,15 +97,12 @@ struct NativeCtx {
 };
 
 struct PictureHolder {
-    vvdecFrame* frame = nullptr; // release with vvdec_frame_unref(dec, frame)
+    vvdecFrame* frame = nullptr;
+    vvdecDecoder* dec = nullptr;  // Store decoder ref for unref
 };
 
-static inline bool isValid(NativeCtx* ctx) {
-    return ctx && ctx->magic == kMagic && ctx->dec;
-}
-
 static inline void ensureWindowConfigured(NativeCtx* ctx, int w, int h, int fmt) {
-    if (!ctx || !ctx->win) {return;}
+    if (!ctx || !ctx->win) return;
     if (ctx->win_w != w || ctx->win_h != h || ctx->win_fmt != fmt) {
         ANativeWindow_setBuffersGeometry(ctx->win, w, h, fmt);
         ctx->win_w = w;
@@ -123,31 +111,69 @@ static inline void ensureWindowConfigured(NativeCtx* ctx, int w, int h, int fmt)
     }
 }
 
-// These helpers assume caller holds ctx->dec_mtx.
-static void release_all_pending_locked(NativeCtx* ctx) {
-    if (!ctx) {return;}
+// Release all pending input nodes
+static void release_all_pending(NativeCtx* ctx) {
     while (!ctx->pending.empty()) {
-        auto* n = ctx->pending.front();
+        InputNode* n = ctx->pending.front();
         ctx->pending.pop_front();
         delete n;
         ctx->num_frames_not_decoded++;
     }
 }
 
-// These helpers assume caller holds ctx->dec_mtx.
-static void release_all_ready_locked(NativeCtx* ctx) {
-    if (!ctx) {return;}
+// Release all ready frames
+static void release_all_ready(NativeCtx* ctx) {
     while (!ctx->ready.empty()) {
         vvdecFrame* f = ctx->ready.front();
         ctx->ready.pop_front();
-        if (ctx->dec && f) {
+        if (f && ctx->dec) {
             vvdec_frame_unref(ctx->dec, f);
         }
     }
 }
 
-extern "C" JNIEXPORT jlong JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeCreate(JNIEnv*, jclass, jint threads) {
+// Try to feed pending AUs to decoder (like dav1d's flush_pending_to_decoder)
+static void flush_pending_to_decoder(NativeCtx* ctx) {
+    while (!ctx->pending.empty()) {
+        InputNode* n = ctx->pending.front();
+        vvdecFrame* out = nullptr;
 
+        int rc = vvdec_decode(ctx->dec, n->au, &out);
+
+        if (rc == VVDEC_TRY_AGAIN) {
+            ctx->pkts_send_tryagain++;
+            // Decoder needs to output frames first - can't accept more input
+            if (out) ctx->ready.push_back(out);
+            break;
+        }
+
+        if (rc != VVDEC_OK && rc != VVDEC_EOF) {
+            ctx->pkts_send_err++;
+            LOGE("vvdec_decode failed: %d (dropping packet)", rc);
+            ctx->pending.pop_front();
+            delete n;
+            if (out) vvdec_frame_unref(ctx->dec, out);
+            continue;
+        }
+
+        // Success - AU was consumed
+        ctx->pkts_send_ok++;
+        ctx->num_frames_decoded++;
+        ctx->last_in_pts = n->pts_us;
+        ctx->pending.pop_front();
+        delete n;
+
+        // Queue any frame returned during input
+        if (out) ctx->ready.push_back(out);
+
+        if (rc == VVDEC_EOF) break;
+    }
+}
+
+// --------------------------- JNI API ---------------------------
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeCreate(JNIEnv*, jclass, jint threads) {
     auto* ctx = new (std::nothrow) NativeCtx();
     if (!ctx) {
         LOGE("nativeCreate: failed to allocate NativeCtx");
@@ -156,11 +182,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_
 
     vvdecParams p;
     vvdec_params_default(&p);
-
-    threads = (threads == 0) ? 1 : threads;
-
-    // Prefer a deterministic single-thread default for stability on low-RAM devices.
-    p.threads = threads;
+    p.threads = (threads == 0) ? 1 : threads;
 
     ctx->dec = vvdec_decoder_open(&p);
     if (!ctx->dec) {
@@ -174,65 +196,41 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeFlush(
-        JNIEnv*, jclass, jlong handle) {
-
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeFlush(JNIEnv*, jclass, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
-    if (!isValid(ctx)) {return;}
+    if (!ctx || !ctx->dec) return;
 
-    std::lock_guard<std::mutex> lk(ctx->dec_mtx);
+    ctx->dropped_at_flush += static_cast<uint32_t>(ctx->pending.size());
+    release_all_pending(ctx);
+    release_all_ready(ctx);
 
-    ctx->dropped_at_flush += (uint32_t)ctx->pending.size();
-    release_all_pending_locked(ctx);
-
-    // Drain decoder into ready queue with a safety cap.
-    for (int i = 0; i < kMaxDrainPerCall; ++i) {
-        vvdecFrame* f = nullptr;
+    // Drain any remaining frames from decoder
+    vvdecFrame* f = nullptr;
+    while (true) {
         int ret = vvdec_flush(ctx->dec, &f);
-
-        if (ret == VVDEC_EOF || ret == VVDEC_TRY_AGAIN) {
-            if (f) {ctx->ready.push_back(f);}
-            break;
-        }
-
-        if (ret != VVDEC_OK) {
-            LOGW("vvdec_flush ret=%d", ret);
-            if (f) {
-                vvdec_frame_unref(ctx->dec, f);
-            }
-            break;
-        }
-
-        // ret == VVDEC_OK
         if (f) {
-            ctx->ready.push_back(f);
-        } else {
-            // Defensive: avoid potential busy-spin if OK but no frame.
+            vvdec_frame_unref(ctx->dec, f);
+            f = nullptr;
+        }
+        if (ret == VVDEC_EOF || ret == VVDEC_TRY_AGAIN || ret != VVDEC_OK) {
             break;
         }
     }
+
+    ctx->eos = false;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeClose(
-        JNIEnv*, jclass, jlong handle) {
-
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeClose(JNIEnv*, jclass, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
-    if (!ctx || ctx->magic != kMagic) {return;}
+    if (!ctx) return;
 
-    {
-        std::lock_guard<std::mutex> lk(ctx->dec_mtx);
+    release_all_pending(ctx);
+    release_all_ready(ctx);
 
-        release_all_ready_locked(ctx);
-        release_all_pending_locked(ctx);
-
-        if (ctx->dec) {
-            vvdec_decoder_close(ctx->dec);
-            ctx->dec = nullptr;
-        }
-
-        // Poison magic under lock to help catch UAF early.
-        ctx->magic = 0;
+    if (ctx->dec) {
+        vvdec_decoder_close(ctx->dec);
+        ctx->dec = nullptr;
     }
 
     {
@@ -241,7 +239,6 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeClose(
             ANativeWindow_release(ctx->win);
             ctx->win = nullptr;
         }
-        ctx->win_w = ctx->win_h = ctx->win_fmt = 0;
     }
 
     LOGD("CLOSE stats: decoded=%d displayed=%d not_decoded=%d send_ok=%u tryagain=%u err=%u pics_out=%u dropped_at_flush=%u",
@@ -252,37 +249,34 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeClose(
     delete ctx;
 }
 
-extern "C" JNIEXPORT jint JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeQueueInput(
+extern "C" JNIEXPORT jint JNICALL
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeQueueInput(
         JNIEnv* env, jclass, jlong handle,
         jobject byteBuffer, jint offset, jint size, jlong ptsUs) {
 
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
-    if (!isValid(ctx)) {return -EINVAL;}
-    if (!byteBuffer) {return -EINVAL;}
-    if (size <= 0) {return -EINVAL;}
+    if (!ctx || !ctx->dec) return -EINVAL;
+    if (!byteBuffer || size <= 0) return -EINVAL;
 
-    // Validate direct buffer capacity + bounds before touching the pointer.
+    if (ctx->pending.size() >= kMaxPendingPackets) {
+        return -EAGAIN;
+    }
+
     jlong cap = env->GetDirectBufferCapacity(byteBuffer);
-    if (cap < 0) {
-        LOGE("nativeQueueInput: non-direct ByteBuffer");
-        return -EINVAL;
-    }
-    if (offset < 0 || size < 0 || (jlong)offset + (jlong)size > cap) {
-        LOGE("nativeQueueInput: bad offset/size (offset=%d size=%d cap=%lld)",
-            offset, size, (long long)cap);
+    if (cap < 0 || offset < 0 || (jlong)offset + size > cap) {
+        LOGE("nativeQueueInput: invalid buffer bounds");
         return -EINVAL;
     }
 
-    uint8_t* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(byteBuffer));
-    if (!base) {
-        LOGE("nativeQueueInput: GetDirectBufferAddress returned null");
+    uint8_t* src = static_cast<uint8_t*>(env->GetDirectBufferAddress(byteBuffer));
+    if (!src) {
+        LOGE("nativeQueueInput: not a direct ByteBuffer");
         return -EINVAL;
     }
-    uint8_t* src = base + offset;
+    src += offset;
 
-    // Build AU outside the lock to keep lock hold time short.
     auto* node = new (std::nothrow) InputNode();
-    if (!node) {return -ENOMEM;}
+    if (!node) return -ENOMEM;
 
     node->au = vvdec_accessUnit_alloc();
     if (!node->au) {
@@ -291,8 +285,6 @@ extern "C" JNIEXPORT jint JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_n
     }
 
     vvdec_accessUnit_default(node->au);
-
-    // Allocate payload (returns void in your vvdec headers).
     vvdec_accessUnit_alloc_payload(node->au, (uint32_t)size);
     if (!node->au->payload || node->au->payloadSize < (uint32_t)size) {
         delete node;
@@ -305,149 +297,71 @@ extern "C" JNIEXPORT jint JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_n
     node->au->ctsValid = 1;
     node->pts_us = (int64_t)ptsUs;
 
-    vvdecFrame* out = nullptr;
-
-    {
-        std::lock_guard<std::mutex> lk(ctx->dec_mtx);
-        if (!isValid(ctx)) {
-        delete node;
-        return -EINVAL;
-    }
-
     ctx->pkts_in_total++;
-
-    // If the pending queue is full, we prefer not to crash playback.
-    // This should be prevented by nativeHasCapacity() in normal operation.
-    if (ctx->pending.size() >= kMaxPendingPackets) {
-        LOGW("nativeQueueInput: pending full (%zu), dropping AU pts=%lld",
-            ctx->pending.size(), (long long)ptsUs);
-        delete node;
-        ctx->pkts_send_err++;
-        ctx->num_frames_not_decoded++;
-        return 0;
-    }
-
-    // Enqueue AU for later (or immediate) feeding.
     ctx->pending.push_back(node);
 
-    // Try to feed as many queued AUs as vvdec will accept.
-    while (!ctx->pending.empty()) {
-        InputNode* head = ctx->pending.front();
-        out = nullptr;
-
-        int ret = vvdec_decode(ctx->dec, head->au, &out);
-
-        if (ret == VVDEC_TRY_AGAIN) {
-        ctx->pkts_send_tryagain++;
-        if (out) ctx->ready.push_back(out);
-            // Do not consume the AU; keep it in pending.
-            break;
-        }
-
-        if (ret != VVDEC_OK && ret != VVDEC_EOF) {
-            ctx->pkts_send_err++;
-            LOGE("nativeQueueInput: vvdec_decode(feed) ret=%d", ret);
-
-            // Drop this AU to avoid stalling the queue indefinitely.
-            ctx->pending.pop_front();
-            delete head;
-            ctx->num_frames_not_decoded++;
-
-            if (out) {
-                // Conservative: keep frame if provided.
-                ctx->ready.push_back(out);
-            }
-            // Treat as fatal for this call.
-            return -EIO;
-        }
-
-        // OK or EOF: AU was accepted/consumed by decoder.
-        ctx->pkts_send_ok++;
-        ctx->num_frames_decoded++;
-        ctx->last_in_pts = head->pts_us;
-
-        ctx->pending.pop_front();
-        delete head;
-
-        if (out) {ctx->ready.push_back(out);}
-
-        if (ret == VVDEC_EOF) {
-            // No more input accepted after EOF.
-            break;
-        }
-    }
-
-    // Non-blocking drain: pull additional ready frames without feeding.
-    for (int i = 0; i < kMaxDrainPerCall; ++i) {
-        vvdecFrame* f = nullptr;
-        int r = vvdec_decode(ctx->dec, nullptr, &f);
-
-        if (r == VVDEC_TRY_AGAIN) {
-            if (f) {ctx->ready.push_back(f);}
-            break;
-        }
-        if (r != VVDEC_OK && r != VVDEC_EOF) {
-            LOGE("nativeQueueInput: vvdec_decode(drain) ret=%d", r);
-            if (f && ctx->dec) {
-                vvdec_frame_unref(ctx->dec, f);
-            }
-            break;
-        }
-
-        if (f) {
-            ctx->ready.push_back(f);
-        } else {
-            // Defensive: avoid potential busy-spin if OK but no frame.
-            if (r == VVDEC_OK) {break;}
-        }
-
-        if (r == VVDEC_EOF) {break;}
-        }
-    }
+    // Try to feed to decoder (like dav1d pattern)
+    flush_pending_to_decoder(ctx);
 
     return 0;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-        Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeHasCapacity(
-        JNIEnv*, jclass, jlong handle) {
-
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeHasCapacity(JNIEnv*, jclass, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
-    if (!isValid(ctx)) {return JNI_FALSE;}
-
-    std::lock_guard<std::mutex> lk(ctx->dec_mtx);
-    if (!isValid(ctx)) {return JNI_FALSE;}
-
+    if (!ctx || !ctx->dec) return JNI_FALSE;
     return (ctx->pending.size() < kMaxPendingPackets) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-        Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeDequeueFrame(
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeDequeueFrame(
         JNIEnv* env, jclass, jlong handle,
-jintArray outWH, jlongArray outPtsUs) {
+        jintArray outWH, jlongArray outPtsUs) {
 
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
-    if (!isValid(ctx)) return 0;
+    if (!ctx || !ctx->dec) return 0;
     if (!outWH || !outPtsUs) return 0;
 
-    std::lock_guard<std::mutex> lk(ctx->dec_mtx);
-    if (!isValid(ctx)) {return 0;}
-    if (ctx->ready.empty()) return 0;
+    // Try to feed any pending input first (like dav1d)
+    flush_pending_to_decoder(ctx);
 
-    vvdecFrame* frame = ctx->ready.front();
-    ctx->ready.pop_front();
-    if (!frame) {return 0;}
+    vvdecFrame* frame = nullptr;
+
+    // First check the ready queue
+    if (!ctx->ready.empty()) {
+        frame = ctx->ready.front();
+        ctx->ready.pop_front();
+    } else {
+        // Try to get a frame from decoder directly
+        int rc = vvdec_decode(ctx->dec, nullptr, &frame);
+
+        if (rc == VVDEC_TRY_AGAIN || rc == VVDEC_EOF) {
+            if (frame) vvdec_frame_unref(ctx->dec, frame);
+            return 0;
+        }
+
+        if (rc != VVDEC_OK) {
+            LOGE("vvdec_decode(null) failed: %d", rc);
+            if (frame) vvdec_frame_unref(ctx->dec, frame);
+            return 0;
+        }
+    }
+
+    if (!frame) {
+        return 0;
+    }
 
     auto* hold = new (std::nothrow) PictureHolder();
     if (!hold) {
-        // Put back so we don't leak ownership expectations.
-        ctx->ready.push_front(frame);
+        vvdec_frame_unref(ctx->dec, frame);
         return 0;
     }
     hold->frame = frame;
+    hold->dec = ctx->dec;
 
     jint wh[2] = { (jint)frame->width, (jint)frame->height };
     env->SetIntArrayRegion(outWH, 0, 2, wh);
+
     jlong pts[1] = { (jlong)frame->cts };
     env->SetLongArrayRegion(outPtsUs, 0, 1, pts);
 
@@ -462,7 +376,7 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeSetSurface(
         JNIEnv* env, jclass, jlong handle, jobject surface) {
 
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
-    if (!ctx || ctx->magic != kMagic) {return;}
+    if (!ctx) return;
 
     std::lock_guard<std::mutex> lk(ctx->win_mtx);
 
@@ -477,29 +391,32 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeSetSurface(
 }
 
 extern "C" JNIEXPORT jint JNICALL
-        Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeRenderToSurface(
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeRenderToSurface(
         JNIEnv*, jclass, jlong handle, jlong nativePic, jobject) {
 
-    auto* ctx  = reinterpret_cast<NativeCtx*>(handle);
+    auto* ctx = reinterpret_cast<NativeCtx*>(handle);
     auto* hold = reinterpret_cast<PictureHolder*>(nativePic);
-    if (!ctx || ctx->magic != kMagic || !hold || !hold->frame) {return -EINVAL;}
+    if (!ctx || !hold || !hold->frame) return -EINVAL;
 
     const vvdecFrame* f = hold->frame;
 
-    // Fast 8-bit YUV420 planar path (like the dav1d YV12 path)
-    if (f->bitDepth != 8 || f->colorFormat != VVDEC_CF_YUV420_PLANAR) {return -ENOSYS;}
+    // Fast 8-bit YUV420 planar path
+    if (f->bitDepth != 8 || f->colorFormat != VVDEC_CF_YUV420_PLANAR) {
+        LOGE("Unsupported format: bitDepth=%d colorFormat=%d", f->bitDepth, f->colorFormat);
+        return -ENOSYS;
+    }
 
     const int w = f->width;
     const int h = f->height;
-    const int YV12 = 0x32315659; // 'YV12'
+    const int YV12 = 0x32315659;
 
     std::lock_guard<std::mutex> lk(ctx->win_mtx);
-    if (!ctx->win) {return -ENODEV;}
+    if (!ctx->win) return -ENODEV;
 
     ensureWindowConfigured(ctx, w, h, YV12);
 
     ANativeWindow_Buffer buf;
-    if (ANativeWindow_lock(ctx->win, &buf, nullptr) != 0) {return -1;}
+    if (ANativeWindow_lock(ctx->win, &buf, nullptr) != 0) return -1;
 
     auto* dstY = static_cast<uint8_t*>(buf.bits);
     const int dstYStride = buf.stride;
@@ -512,71 +429,50 @@ extern "C" JNIEXPORT jint JNICALL
     const uint8_t* srcY = (const uint8_t*)f->planes[0].ptr;
     const uint8_t* srcU = (const uint8_t*)f->planes[1].ptr;
     const uint8_t* srcV = (const uint8_t*)f->planes[2].ptr;
-    const int srcYStride  = (int)f->planes[0].stride;
+    const int srcYStride = (int)f->planes[0].stride;
     const int srcUVStride = (int)f->planes[1].stride;
 
-    auto copyPlanePad = [](const uint8_t* s, int ss, uint8_t* d, int ds, int rb, int rows) {
-        if (!s || !d || ss <= 0 || ds <= 0 || rb <= 0 || rows <= 0) {return;}
-        if (ds == rb) {
-            for (int j = 0; j < rows; ++j) {
-                memcpy(d, s, rb);
-                s += ss;
-                d += ds;
-            }
-        } else {
-            const int pad = ds - rb;
-            for (int j = 0; j < rows; ++j) {
-                memcpy(d, s, rb);
-                memset(d + rb, 0, pad);
-                s += ss;
-                d += ds;
-            }
-        }
-    };
-
-    copyPlanePad(srcY, srcYStride,  dstY, dstYStride,  w,   h);
-    copyPlanePad(srcV, srcUVStride, dstV, dstUVStride, uvW, uvH); // V first in YV12
-    copyPlanePad(srcU, srcUVStride, dstU, dstUVStride, uvW, uvH);
+    // Copy Y plane
+    for (int j = 0; j < h; ++j) {
+        memcpy(dstY + j * dstYStride, srcY + j * srcYStride, w);
+    }
+    // Copy V plane (YV12 has V before U)
+    for (int j = 0; j < uvH; ++j) {
+        memcpy(dstV + j * dstUVStride, srcV + j * srcUVStride, uvW);
+    }
+    // Copy U plane
+    for (int j = 0; j < uvH; ++j) {
+        memcpy(dstU + j * dstUVStride, srcU + j * srcUVStride, uvW);
+    }
 
     ANativeWindow_unlockAndPost(ctx->win);
-
-    // This is a render-only stat; no need for dec_mtx.
     ctx->num_frames_displayed++;
     return 0;
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeReleasePicture(
-        JNIEnv*, jclass, jlong handle, jlong nativePic) {
+        JNIEnv*, jclass, jlong /*handle*/, jlong nativePic) {
 
-    auto* ctx  = reinterpret_cast<NativeCtx*>(handle);
     auto* hold = reinterpret_cast<PictureHolder*>(nativePic);
-    if (!ctx || ctx->magic != kMagic || !hold) {return;}
+    if (!hold) return;
 
-    std::lock_guard<std::mutex> lk(ctx->dec_mtx);
-    if (ctx->dec && hold->frame) {
-        vvdec_frame_unref(ctx->dec, hold->frame);
-        hold->frame = nullptr;
+    // Release frame directly (like dav1d - no mutex needed)
+    if (hold->frame && hold->dec) {
+        vvdec_frame_unref(hold->dec, hold->frame);
     }
     delete hold;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_roncatech_libvcat_vvdec_NativeVvdec_vvdecGetVersion(
-        JNIEnv* env, jclass) {
-
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_vvdecGetVersion(JNIEnv* env, jclass) {
     const char* v = vvdec_get_version();
     return env->NewStringUTF(v ? v : "unknown");
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeSignalEof(
-        JNIEnv*, jclass, jlong handle) {
-
+Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeSignalEof(JNIEnv*, jclass, jlong handle) {
     auto* ctx = reinterpret_cast<NativeCtx*>(handle);
-    if (!ctx || ctx->magic != kMagic) {return;}
-
-    std::lock_guard<std::mutex> lk(ctx->dec_mtx);
-    if (!isValid(ctx)) {return;}
+    if (!ctx) return;
     ctx->eos = true;
 }

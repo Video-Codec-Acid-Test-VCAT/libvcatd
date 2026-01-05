@@ -51,7 +51,7 @@ final class VvdecDecoder
     private static final int FLAG_END_OF_STREAM = 0x4;
 
     private static final int NUM_INPUT_BUFFERS  = 8;
-    private static final int NUM_OUTPUT_BUFFERS = 4;
+    private static final int NUM_OUTPUT_BUFFERS = 8;
 
     private final int threads;
 
