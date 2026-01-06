@@ -43,8 +43,10 @@ import androidx.media3.decoder.DecoderOutputBuffer;
 import androidx.media3.decoder.SimpleDecoder;
 import androidx.media3.decoder.VideoDecoderOutputBuffer;
 
+import java.nio.ByteBuffer;
+
 @UnstableApi
-final class VvdecDecoder
+class VvdecDecoder
         extends SimpleDecoder<DecoderInputBuffer, VvdecOutputBuffer, DecoderException> {
 
     // Local copies of 2.x buffer flags to avoid Media3 suggestions.
@@ -57,6 +59,8 @@ final class VvdecDecoder
 
     private long nativeCtx; // 0 when released
     private Format inputFormat;
+
+    @SuppressWarnings("unused")
     private boolean eosSignaled = false;
 
     VvdecDecoder(int threads) throws DecoderException {
@@ -131,9 +135,7 @@ final class VvdecDecoder
 
     @Override
     protected DecoderException decode(
-            DecoderInputBuffer in,
-            VvdecOutputBuffer out,
-            boolean reset) {
+            DecoderInputBuffer in, VvdecOutputBuffer out, boolean reset) {
 
         if (nativeCtx == 0) {
             return new DecoderException("Decoder released");
@@ -144,18 +146,18 @@ final class VvdecDecoder
             eosSignaled = false;
         }
 
-        // EOS path: signal EOF, try one drain; if none, set EOS flag.
+        // EOS: signal EOF to decoder and try to drain one last frame.
         if (in.isEndOfStream()) {
             NativeVvdec.nativeSignalEof(nativeCtx);
             eosSignaled = true;
 
             int[]  wh  = new int[2];
             long[] pts = new long[1];
+
             long h = NativeVvdec.nativeDequeueFrame(nativeCtx, wh, pts);
             if (wh[0] == -1) {
                 return new DecoderException("vvdec dequeue failed: " + wh[1]);
             }
-
             if (h != 0) {
                 out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
                 out.timeUs = pts[0];
@@ -163,6 +165,8 @@ final class VvdecDecoder
                 out.height = wh[1];
                 out.format = inputFormat;
                 out.nativePic = h;
+                // Caller will see a normal frame followed by a buffer with EOS flag later.
+                return null;
             }
             out.addFlag(FLAG_END_OF_STREAM);
             return null;
@@ -172,56 +176,52 @@ final class VvdecDecoder
             return new DecoderException("Input buffer has no data");
         }
 
-        // If the native queue is "full", try to drain first to make space.
-        if (!NativeVvdec.nativeHasCapacity(nativeCtx)) {
-            int[]  wh  = new int[2];
-            long[] pts = new long[1];
-            long h = NativeVvdec.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) {
-                return new DecoderException("vvdec dequeue failed: " + wh[1]);
-            }
-            if (h != 0) {
-                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
-                out.timeUs = pts[0];
-                out.width  = wh[0];
-                out.height = wh[1];
-                out.format = inputFormat;
-                out.nativePic = h;
-                // We’ve produced a frame; caller will handle buffer lifecycle.
-                return null;
-            }
-            // No frame yet; let upstream feed again later.
-            return null;
-        }
+        // Gav1-style decode flow:
+        //  - Push the entire access unit into the decoder.
+        //  - Decide decodeOnly based on outputStartTime.
+        //  - Always attempt to dequeue a frame (whether decodeOnly or not).
+        final ByteBuffer data = in.data;
+        final int offset      = data.position();
+        final int size        = data.remaining();
 
-        // Enqueue current input into native; vvdec may also return a frame immediately.
         int rc = NativeVvdec.nativeQueueInput(
-                nativeCtx, in.data, in.data.position(), in.data.remaining(), in.timeUs);
+                nativeCtx,
+                data,
+                offset,
+                size,
+                in.timeUs);
 
-        if (rc != 0) {
-            // Our JNI returns 0 on success, negative errno otherwise.
+        // Treat 0 as success. If native uses -11/EAGAIN, let that just mean "no new frame yet".
+        if (rc != 0 && rc != -11) {
             return new DecoderException("nativeQueueInput failed: " + rc);
         }
 
-        // Non-blocking drain attempt (vvdec may have produced one).
-        {
-            int[]  wh  = new int[2];
-            long[] pts = new long[1];
-            long h = NativeVvdec.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) {
-                return new DecoderException("vvdec dequeue failed: " + wh[1]);
-            }
-            if (h != 0) {
-                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
-                out.timeUs = pts[0];
-                out.width  = wh[0];
-                out.height = wh[1];
-                out.format = inputFormat;
-                out.nativePic = h;
-                return null;
+        boolean decodeOnly = !isAtLeastOutputStartTimeUs(in.timeUs);
+
+        int[]  wh  = new int[2];
+        long[] pts = new long[1];
+        long h = NativeVvdec.nativeDequeueFrame(nativeCtx, wh, pts);
+
+        if (wh[0] == -1) {
+            return new DecoderException("vvdec dequeue failed: " + wh[1]);
+        }
+
+        if (h != 0) {
+            out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
+            out.timeUs = pts[0];
+            out.width  = wh[0];
+            out.height = wh[1];
+            out.format = inputFormat;
+            out.nativePic = h;
+
+            // Align with gav1: preroll frames are still dequeued but flagged to be skipped.
+            if (decodeOnly) {
+                out.shouldBeSkipped = true;
             }
         }
 
+        // Returning null tells SimpleDecoder "no fatal error".
+        // If no frame was produced (h == 0), the outputBuffer will be ignored by the caller.
         return null;
     }
 
@@ -235,9 +235,4 @@ final class VvdecDecoder
             throw new DecoderException("nativeRenderToSurface failed: " + rc);
         }
     }
-
-    // Get the vvdec decoder version string (e.g., "3.0.0").
-    public static native String vvdecGetVersion();
-
-    // (Other JNI methods are implemented in NativeVvdec.)
 }

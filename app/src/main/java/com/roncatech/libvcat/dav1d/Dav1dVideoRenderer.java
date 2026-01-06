@@ -54,7 +54,6 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener;
 final class Dav1dVideoRenderer extends DecoderVideoRenderer {
 
     private static final String TAG = "Dav1dVideoRenderer";
-
     private static final int MAX_DROPPED_FRAMES_TO_NOTIFY = 50;
 
     private final int frameThreads;
@@ -63,13 +62,13 @@ final class Dav1dVideoRenderer extends DecoderVideoRenderer {
     private Dav1dDecoder decoder;
     private Surface currentSurface;
 
-    public Dav1dVideoRenderer(
+    Dav1dVideoRenderer(
             long allowedJoiningTimeMs,
             Handler eventHandler,
             VideoRendererEventListener eventListener,
             int frameThreads,
             int tileThreads) {
-        // Media3 still uses the same 4-arg super(..) here.
+
         super(allowedJoiningTimeMs, eventHandler, eventListener, MAX_DROPPED_FRAMES_TO_NOTIFY);
         this.frameThreads = Math.max(1, frameThreads);
         this.tileThreads  = Math.max(1, tileThreads);
@@ -77,41 +76,61 @@ final class Dav1dVideoRenderer extends DecoderVideoRenderer {
 
     @Override
     public String getName() {
-        return "Dav1dVideoRenderer";
+        return TAG;
+    }
+
+    @Override
+    public int supportsFormat(Format format) {
+        final String mime = format.sampleMimeType;
+        if (!MimeTypes.VIDEO_AV1.equalsIgnoreCase(mime)) {
+            return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_TYPE);
+        }
+        // dav1d path is clear-only (no DRM).
+        if (format.drmInitData != null) {
+            return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_DRM);
+        }
+        return RendererCapabilities.create(C.FORMAT_HANDLED);
     }
 
     @Override
     protected Decoder<DecoderInputBuffer, ? extends VideoDecoderOutputBuffer, ? extends DecoderException>
     createDecoder(Format format, CryptoConfig cryptoConfig) throws DecoderException {
-        this.decoder = new Dav1dDecoder(frameThreads, tileThreads);
 
-        if (this.currentSurface != null) {
-            this.decoder.setOutputSurface(this.currentSurface);
+        Dav1dDecoder decoder = new Dav1dDecoder(frameThreads, tileThreads);
+        this.decoder = decoder;
+
+        // If a Surface is already known (e.g., set before decoder creation), push it down now.
+        if (currentSurface != null) {
+            decoder.setOutputSurface(currentSurface);
         }
-        return this.decoder;
+
+        // Let the decoder know the input format for width/height/format propagation.
+        decoder.setInputFormat(format);
+
+        return decoder;
     }
 
     @Override
     protected void renderOutputBufferToSurface(
-            VideoDecoderOutputBuffer outputBuffer, Surface surface)
-            throws DecoderException {
+            VideoDecoderOutputBuffer outputBuffer,
+            Surface surface) throws DecoderException {
 
         if (decoder == null) {
             throw new DecoderException(
                     "Failed to render output buffer to surface: decoder is not initialized.");
         }
 
-        // Only notify native when the Surface actually changes.
+        // Only push surface to JNI when it actually changes; JNI caches/releases ANativeWindow.
         if (surface != currentSurface) {
-            currentSurface = surface;                  // may be null
-            decoder.setOutputSurface(currentSurface);  // JNI caches/releases ANativeWindow
+            currentSurface = surface; // may be null
+            decoder.setOutputSurface(currentSurface);
         }
 
         decoder.renderToSurface((Dav1dOutputBuffer) outputBuffer);
         outputBuffer.release();
     }
 
-    private static String videoOutputModeStr(int outputMode) {
+    private static String videoOutputModeStr(@C.VideoOutputMode int outputMode) {
         switch (outputMode) {
             case C.VIDEO_OUTPUT_MODE_YUV:
                 return "VIDEO_OUTPUT_MODE_YUV";
@@ -124,17 +143,18 @@ final class Dav1dVideoRenderer extends DecoderVideoRenderer {
     }
 
     @Override
-    protected void setDecoderOutputMode(int outputMode) {
-        Log.d(TAG, "setDecoderOutputMode=" + outputMode + " (" + videoOutputModeStr(outputMode) + ")");
+    protected void setDecoderOutputMode(@C.VideoOutputMode int outputMode) {
+        // For now dav1d always outputs SURFACE_YUV from JNI.
+        // This override exists mainly for logging and API parity.
+        Log.d(TAG, "setDecoderOutputMode=" + outputMode
+                + " (" + videoOutputModeStr(outputMode) + ")");
 
         switch (outputMode) {
             case C.VIDEO_OUTPUT_MODE_YUV:
             case C.VIDEO_OUTPUT_MODE_SURFACE_YUV:
             case C.VIDEO_OUTPUT_MODE_NONE:
-                // dav1d always outputs YUV planes. If you add a mode switch in Dav1dDecoder,
-                // wire it up here; otherwise this is effectively a no-op.
+                // No-op: Dav1dDecoder sets out.mode directly when it dequeues a frame.
                 return;
-
             default:
                 throw new IllegalArgumentException(
                         "Surface output mode (" + videoOutputModeStr(outputMode)
@@ -144,52 +164,39 @@ final class Dav1dVideoRenderer extends DecoderVideoRenderer {
 
     @Override
     protected DecoderReuseEvaluation canReuseDecoder(
-            String name, Format oldF, Format newF) {
-
-        // Re-init on format change for now.
+            String decoderName, Format oldFormat, Format newFormat) {
+        // Choice A: always recreate decoder on format change (safest).
         return new DecoderReuseEvaluation(
-                name,
-                oldF,
-                newF,
+                decoderName,
+                oldFormat,
+                newFormat,
                 DecoderReuseEvaluation.REUSE_RESULT_NO,
-                0 /* discardReasons */);
-    }
-
-    @Override
-    public int supportsFormat(Format format) {
-        final String mime = format.sampleMimeType;
-        if (!MimeTypes.VIDEO_AV1.equals(mime)) {
-            return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_TYPE);
-        }
-        // dav1d path is clear-only (no DRM)
-        if (format.drmInitData != null) {
-            return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_DRM);
-        }
-        return RendererCapabilities.create(C.FORMAT_HANDLED);
+                /* discardReasons= */ 0);
     }
 
     @Override
     protected boolean shouldDropOutputBuffer(long earlyUs, long elapsedRealtimeUs) {
-        // Only drop if > 50 ms late.
-        return earlyUs < -50_000;
+        // Only drop if > 50 ms late. Less aggressive than some defaults; tuned for software decoders.
+        return earlyUs < -150_000;
     }
 
     @Override
     protected boolean shouldDropBuffersToKeyframe(long earlyUs, long elapsedRealtimeUs) {
         // Only skip forward to a keyframe if we're ~0.5 s behind.
-        return earlyUs < -500_000;
+        return earlyUs < -1_000_000;
     }
 
     @Override
     protected boolean shouldForceRenderOutputBuffer(long earlyUs, long elapsedRealtimeUs) {
         // Render when due or slightly late.
-        return earlyUs <= 0;
+        return earlyUs <= 20_000;
     }
 
     @Override
     protected void onDisabled() {
         try {
             if (decoder != null) {
+                // Release cached ANativeWindow on the native side.
                 decoder.setOutputSurface(null);
             }
             currentSurface = null;

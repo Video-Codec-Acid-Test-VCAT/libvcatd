@@ -43,11 +43,14 @@ import androidx.media3.decoder.DecoderOutputBuffer;
 import androidx.media3.decoder.SimpleDecoder;
 import androidx.media3.decoder.VideoDecoderOutputBuffer;
 
+import java.nio.ByteBuffer;
+
 @UnstableApi
 class Dav1dDecoder
         extends SimpleDecoder<DecoderInputBuffer, Dav1dOutputBuffer, DecoderException> {
 
     // Local copies of 2.x buffer flags to avoid Media3 suggestions.
+    // Matches C.BUFFER_FLAG_END_OF_STREAM semantics for VideoDecoderOutputBuffer.
     private static final int FLAG_END_OF_STREAM = 0x4;
 
     private static final int NUM_INPUT_BUFFERS  = 8;
@@ -59,6 +62,7 @@ class Dav1dDecoder
     private long nativeCtx; // 0 when released
     private Format inputFormat;
 
+    @SuppressWarnings("unused")
     private boolean eosSignaled = false;
 
     Dav1dDecoder(int frameThreads, int tileThreads) throws DecoderException {
@@ -75,10 +79,12 @@ class Dav1dDecoder
         }
     }
 
-    // Dav1dDecoder.java (add this)
     void setOutputSurface(@androidx.annotation.Nullable Surface surface) {
-        if (nativeCtx == 0) return;
-        NativeDav1d.nativeSetSurface(nativeCtx, surface); // caches/replaces ANativeWindow in native
+        if (nativeCtx == 0) {
+            return;
+        }
+        // JNI caches/replaces ANativeWindow internally.
+        NativeDav1d.nativeSetSurface(nativeCtx, surface);
     }
 
     @Override
@@ -146,10 +152,11 @@ class Dav1dDecoder
             eosSignaled = false;
         }
 
-        // EOS: signal, try one drain, else EOS flag
+        // EOS: signal EOF to decoder and try to drain one last frame.
         if (in.isEndOfStream()) {
             NativeDav1d.nativeSignalEof(nativeCtx);
             eosSignaled = true;
+
             int[]  wh  = new int[2];
             long[] pts = new long[1];
 
@@ -164,6 +171,7 @@ class Dav1dDecoder
                 out.height = wh[1];
                 out.format = inputFormat;
                 out.nativePic = h;
+                // Caller will see a normal frame followed by a buffer with EOS flag later.
                 return null;
             }
             out.addFlag(FLAG_END_OF_STREAM);
@@ -174,73 +182,52 @@ class Dav1dDecoder
             return new DecoderException("Input buffer has no data");
         }
 
-        // If full: try one drain; if none, hold input (back-pressure)
-        if (!NativeDav1d.nativeHasCapacity(nativeCtx)) {
-            int[]  wh  = new int[2];
-            long[] pts = new long[1];
-            long h = NativeDav1d.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) {
-                return new DecoderException("dav1d_get_picture failed: " + wh[1]);
-            }
-            if (h != 0) {
-                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
-                out.timeUs = pts[0];
-                out.width  = wh[0];
-                out.height = wh[1];
-                out.format = inputFormat;
-                out.nativePic = h;
-                return null;
-            }
-            return null;
-        }
+        // Gav1-style decode flow:
+        //  - Push the entire access unit into the decoder.
+        //  - Decide decodeOnly based on outputStartTime.
+        //  - Always attempt to dequeue a frame (whether decodeOnly or not).
+        final ByteBuffer data = in.data;
+        final int offset      = data.position();
+        final int size        = data.remaining();
 
-        // Enqueue current input
         int rc = NativeDav1d.nativeQueueInput(
                 nativeCtx,
-                in.data,
-                in.data.position(),
-                in.data.remaining(),
+                data,
+                offset,
+                size,
                 in.timeUs);
-        if (rc == -11) { // EAGAIN: needs drain first
-            int[]  wh  = new int[2];
-            long[] pts = new long[1];
-            long h = NativeDav1d.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) {
-                return new DecoderException("dav1d_get_picture failed: " + wh[1]);
-            }
-            if (h != 0) {
-                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
-                out.timeUs = pts[0];
-                out.width  = wh[0];
-                out.height = wh[1];
-                out.format = inputFormat;
-                out.nativePic = h;
-                return null;
-            }
-            return null;
-        }
-        if (rc != 0) {
+
+        // Treat 0 as success. If native uses -11/EAGAIN, let that just mean "no new frame yet".
+        if (rc != 0 && rc != -11) {
             return new DecoderException("nativeQueueInput failed: " + rc);
         }
 
-        // After enqueue, try one non-blocking drain
-        {
-            int[]  wh  = new int[2];
-            long[] pts = new long[1];
-            long h = NativeDav1d.nativeDequeueFrame(nativeCtx, wh, pts);
-            if (wh[0] == -1) {
-                return new DecoderException("dav1d_get_picture failed: " + wh[1]);
-            }
-            if (h != 0) {
-                out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
-                out.timeUs = pts[0];
-                out.width  = wh[0];
-                out.height = wh[1];
-                out.format = inputFormat;
-                out.nativePic = h;
-                return null;
+        boolean decodeOnly = !isAtLeastOutputStartTimeUs(in.timeUs);
+
+        int[]  wh  = new int[2];
+        long[] pts = new long[1];
+        long h = NativeDav1d.nativeDequeueFrame(nativeCtx, wh, pts);
+
+        if (wh[0] == -1) {
+            return new DecoderException("dav1d_get_picture failed: " + wh[1]);
+        }
+
+        if (h != 0) {
+            out.mode   = C.VIDEO_OUTPUT_MODE_SURFACE_YUV;
+            out.timeUs = pts[0];
+            out.width  = wh[0];
+            out.height = wh[1];
+            out.format = inputFormat;
+            out.nativePic = h;
+
+            // Align with gav1: preroll frames are still dequeued but flagged to be skipped.
+            if (decodeOnly) {
+                out.shouldBeSkipped = true;
             }
         }
+
+        // Returning null tells SimpleDecoder "no fatal error".
+        // If no frame was produced (h == 0), the outputBuffer will be ignored by the caller.
         return null;
     }
 

@@ -172,20 +172,20 @@ public final class VvdecVideoRenderer extends DecoderVideoRenderer {
 
     @Override
     protected boolean shouldDropOutputBuffer(long earlyUs, long elapsedRealtimeUs) {
-        // Drop only if >50 ms late (tune as needed for tests).
-        return earlyUs < -50_000;
+        // Only drop if > 150 ms late. Less aggressive than some defaults; tuned for software decoders.
+        return earlyUs < -150_000;
     }
 
     @Override
     protected boolean shouldDropBuffersToKeyframe(long earlyUs, long elapsedRealtimeUs) {
-        // Seek forward to keyframe if we're ~0.5 s behind.
-        return earlyUs < -500_000;
+        // Only skip forward to a keyframe if we're ~1 s behind.
+        return earlyUs < -1_000_000;
     }
 
     @Override
     protected boolean shouldForceRenderOutputBuffer(long earlyUs, long elapsedRealtimeUs) {
         // Render when due or slightly late.
-        return earlyUs <= 0;
+        return earlyUs <= 20_000;
     }
 
     @Override

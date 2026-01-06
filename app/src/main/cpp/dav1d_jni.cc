@@ -25,7 +25,7 @@
 * Contact: legal@roncatech.com • https://roncatech.com/legal
 */
 
-// extension-dav1d/src/main/cpp/dav1d_jni.cc
+// app/src/main/cpp/dav1d_jni.cc
 //
 // Minimal JNI bridge for dav1d with a scalar I420 -> RGBA converter.
 // Writes RGBA (R,G,B,A) into WINDOW_FORMAT_RGBA_8888 buffers and surfaces
@@ -296,7 +296,7 @@ static inline void ensureWindowConfigured(NativeCtx* ctx, int w, int h, int fmt)
 
 extern "C" JNIEXPORT jint JNICALL
         Java_com_roncatech_libvcat_dav1d_NativeDav1d_nativeRenderToSurface(
-        JNIEnv*, jclass, jlong handle, jlong nativePic, jobject /*unused*/) {
+        JNIEnv*, jclass, jlong handle, jlong nativePic) {
 
 auto* ctx  = reinterpret_cast<NativeCtx*>(handle);
 auto* hold = reinterpret_cast<PictureHolder*>(nativePic);

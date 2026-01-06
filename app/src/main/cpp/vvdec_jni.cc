@@ -81,6 +81,11 @@ struct NativeCtx {
     std::deque<InputNode*> pending;       // AUs created (freed after feeding)
     std::deque<vvdecFrame*> ready;        // frames produced by vvdec_decode()/flush
 
+    // Deferred frame releases - processed when decode thread holds dec_mtx.
+    // Uses separate lightweight mutex to avoid blocking render thread.
+    std::mutex release_mtx;
+    std::deque<vvdecFrame*> to_release;
+
     // Stats
     uint32_t pkts_in_total = 0;
     uint32_t pkts_send_ok = 0;
@@ -120,6 +125,19 @@ static inline void ensureWindowConfigured(NativeCtx* ctx, int w, int h, int fmt)
         ctx->win_w = w;
         ctx->win_h = h;
         ctx->win_fmt = fmt;
+    }
+}
+
+// These helpers assume caller holds ctx->dec_mtx.
+static void process_deferred_releases_locked(NativeCtx* ctx) {
+    if (!ctx || !ctx->dec) {return;}
+    std::lock_guard<std::mutex> lk(ctx->release_mtx);
+    while (!ctx->to_release.empty()) {
+        vvdecFrame* f = ctx->to_release.front();
+        ctx->to_release.pop_front();
+        if (f) {
+            vvdec_frame_unref(ctx->dec, f);
+        }
     }
 }
 
@@ -182,32 +200,28 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeFlush(
 
     std::lock_guard<std::mutex> lk(ctx->dec_mtx);
 
+    // Process any deferred frame releases first.
+    process_deferred_releases_locked(ctx);
+
     ctx->dropped_at_flush += (uint32_t)ctx->pending.size();
     release_all_pending_locked(ctx);
 
-    // Drain decoder into ready queue with a safety cap.
+    // Release any frames already in ready queue (discard for seek).
+    release_all_ready_locked(ctx);
+
+    // Reset eos flag so decoder accepts new input after seek.
+    ctx->eos = false;
+
+    // Drain and discard any frames still inside the decoder.
     for (int i = 0; i < kMaxDrainPerCall; ++i) {
         vvdecFrame* f = nullptr;
         int ret = vvdec_flush(ctx->dec, &f);
 
-        if (ret == VVDEC_EOF || ret == VVDEC_TRY_AGAIN) {
-            if (f) {ctx->ready.push_back(f);}
-            break;
-        }
-
-        if (ret != VVDEC_OK) {
-            LOGW("vvdec_flush ret=%d", ret);
-            if (f) {
-                vvdec_frame_unref(ctx->dec, f);
-            }
-            break;
-        }
-
-        // ret == VVDEC_OK
         if (f) {
-            ctx->ready.push_back(f);
-        } else {
-            // Defensive: avoid potential busy-spin if OK but no frame.
+            vvdec_frame_unref(ctx->dec, f);
+        }
+
+        if (ret == VVDEC_EOF || ret == VVDEC_TRY_AGAIN || ret != VVDEC_OK) {
             break;
         }
     }
@@ -222,6 +236,9 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeClose(
 
     {
         std::lock_guard<std::mutex> lk(ctx->dec_mtx);
+
+        // Process any deferred frame releases first.
+        process_deferred_releases_locked(ctx);
 
         release_all_ready_locked(ctx);
         release_all_pending_locked(ctx);
@@ -309,6 +326,10 @@ extern "C" JNIEXPORT jint JNICALL Java_com_roncatech_libvcat_vvdec_NativeVvdec_n
 
     {
         std::lock_guard<std::mutex> lk(ctx->dec_mtx);
+
+        // Process any deferred frame releases first.
+        process_deferred_releases_locked(ctx);
+
         if (!isValid(ctx)) {
         delete node;
         return -EINVAL;
@@ -431,6 +452,10 @@ jintArray outWH, jlongArray outPtsUs) {
     if (!outWH || !outPtsUs) return 0;
 
     std::lock_guard<std::mutex> lk(ctx->dec_mtx);
+
+    // Process any deferred frame releases first.
+    process_deferred_releases_locked(ctx);
+
     if (!isValid(ctx)) {return 0;}
     if (ctx->ready.empty()) return 0;
 
@@ -478,7 +503,7 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeSetSurface(
 
 extern "C" JNIEXPORT jint JNICALL
         Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeRenderToSurface(
-        JNIEnv*, jclass, jlong handle, jlong nativePic, jobject) {
+        JNIEnv*, jclass, jlong handle, jlong nativePic) {
 
     auto* ctx  = reinterpret_cast<NativeCtx*>(handle);
     auto* hold = reinterpret_cast<PictureHolder*>(nativePic);
@@ -515,21 +540,16 @@ extern "C" JNIEXPORT jint JNICALL
     const int srcYStride  = (int)f->planes[0].stride;
     const int srcUVStride = (int)f->planes[1].stride;
 
+    // Match dav1d copyPlanePad - no redundant null checks
     auto copyPlanePad = [](const uint8_t* s, int ss, uint8_t* d, int ds, int rb, int rows) {
-        if (!s || !d || ss <= 0 || ds <= 0 || rb <= 0 || rows <= 0) {return;}
         if (ds == rb) {
-            for (int j = 0; j < rows; ++j) {
-                memcpy(d, s, rb);
-                s += ss;
-                d += ds;
-            }
+            for (int j = 0; j < rows; ++j) { memcpy(d, s, rb); s += ss; d += ds; }
         } else {
             const int pad = ds - rb;
             for (int j = 0; j < rows; ++j) {
                 memcpy(d, s, rb);
                 memset(d + rb, 0, pad);
-                s += ss;
-                d += ds;
+                s += ss; d += ds;
             }
         }
     };
@@ -539,8 +559,6 @@ extern "C" JNIEXPORT jint JNICALL
     copyPlanePad(srcU, srcUVStride, dstU, dstUVStride, uvW, uvH);
 
     ANativeWindow_unlockAndPost(ctx->win);
-
-    // This is a render-only stat; no need for dec_mtx.
     ctx->num_frames_displayed++;
     return 0;
 }
@@ -553,9 +571,11 @@ Java_com_roncatech_libvcat_vvdec_NativeVvdec_nativeReleasePicture(
     auto* hold = reinterpret_cast<PictureHolder*>(nativePic);
     if (!ctx || ctx->magic != kMagic || !hold) {return;}
 
-    std::lock_guard<std::mutex> lk(ctx->dec_mtx);
-    if (ctx->dec && hold->frame) {
-        vvdec_frame_unref(ctx->dec, hold->frame);
+    // Defer frame release to avoid blocking on dec_mtx from render thread.
+    // The decode thread will process this when it next acquires dec_mtx.
+    if (hold->frame) {
+        std::lock_guard<std::mutex> lk(ctx->release_mtx);
+        ctx->to_release.push_back(hold->frame);
         hold->frame = nullptr;
     }
     delete hold;
