@@ -61,6 +61,7 @@ To publish to local Maven
 ```bash
 ./gradlew publishToMavenLocal
 ```
+To use a custom version of libvcat, increment the version in ./app/build.gradle.  Publish to local Maven, then in VCAT, 'File->Sync Project with Gradle Files'/
 
 ### Feedback
 - [Use the discord channel for VCAT conversations](https://discord.gg/36XQYATF)
