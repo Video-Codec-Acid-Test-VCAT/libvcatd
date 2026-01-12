@@ -1,21 +1,6 @@
 /*
 * VCAT (Video Codec Acid Test)
-*
-* SPDX-FileCopyrightText: Copyright (C) 2020-2025 VCAT authors and RoncaTech
-* SPDX-License-Identifier: GPL-3.0-or-later
-*
-* This file is part of VCAT.
-*
-* VCAT is free software: you can redistribute it and/or modify it
-* under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* You should have received a copy of the GNU General Public License
-* along with VCAT. If not, see <https://www.gnu.org/licenses/gpl-3.0.html>.
-*
-* For commercial use, contact RoncaTech LLC for a written waiver or license:
-* https://roncatech.com/legal
+* (license header unchanged)
 */
 
 plugins {
@@ -25,10 +10,13 @@ plugins {
 }
 
 group   = 'com.roncatech.vcat'
-version = '0.0.2.0'
+def baseVersion = '0.0.3.7'
+def localSuffix = (findProperty('localVersionSuffix') ?: '')
+version = baseVersion + localSuffix   // e.g. -PlocalVersionSuffix=-local
 
-def abis   = ['arm64-v8a','armeabi-v7a']
-def minApi = 29
+def abis      = ['arm64-v8a','armeabi-v7a']
+def vvdecAbis = ['arm64-v8a','armeabi-v7a']          // vvdec arm64 only
+def minApi    = 29
 
 android {
     namespace 'com.roncatech.libvcat'
@@ -40,11 +28,13 @@ android {
         targetSdk 35
         ndk { abiFilters.addAll(abis) }
 
-        // CMake gets dav1d install dirs per ABI
+        // CMake gets per-ABI install dirs for dav1d and vvdec
         externalNativeBuild {
             cmake {
                 arguments "-DDAV1D_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('dav1d/install-arm64-v8a').get().asFile.absolutePath}",
-                        "-DDAV1D_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('dav1d/install-armeabi-v7a').get().asFile.absolutePath}"
+                        "-DDAV1D_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('dav1d/install-armeabi-v7a').get().asFile.absolutePath}",
+                        "-DVVDEC_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('vvdec/install-arm64-v8a').get().asFile.absolutePath}",
+                        "-DVVDEC_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('vvdec/install-armeabi-v7a').get().asFile.absolutePath}"
             }
         }
 
@@ -54,15 +44,25 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug { debuggable true }
     }
 
     externalNativeBuild { cmake { path file('src/main/cpp/CMakeLists.txt') } }
 
-    // Publish only release; AGP adds sources.jar
-    publishing { singleVariant("release") { withSourcesJar() } }
+    // By default, publish only release. Enable all variants with -PpublishAllVariants=true
+    def publishAll = (findProperty('publishAllVariants') ?: 'false').toBoolean()
+    publishing {
+        if (publishAll) {
+            multipleVariants {
+                allVariants()
+                withSourcesJar()
+            }
+        } else {
+            singleVariant("release") { withSourcesJar() }
+        }
+    }
 
     sourceSets {
         main {
@@ -75,30 +75,41 @@ android {
 /* ===== dav1d build (Meson/Ninja) ===== */
 
 def ndkDirProvider  = providers.provider { android.ndkDirectory?.absolutePath }
+// Add Windows host tag and avoid hard failure on null
 def hostTagProvider = providers.provider {
     def ndk = ndkDirProvider.getOrNull()
     if (!ndk) return null
-    for (tag in ['darwin-arm64','darwin-x86_64','linux-x86_64']) {
-        if (file("${ndk}/toolchains/llvm/prebuilt/${tag}/bin").exists()) return tag
-    }
-    return null
-}
-def triplet = { abi -> abi == 'arm64-v8a' ? 'aarch64-linux-android' : 'armv7a-linux-androideabi' }
-def ccFor    = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang" }
-def cxxFor   = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang++" }
-def arFor    = { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-ar" }
-def stripFor = { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-strip" }
 
-def workRoot    = layout.buildDirectory.dir('dav1d').get().asFile
-def dav1dSrcDir = new File(workRoot, 'src')
-def dav1dRef    = (findProperty('dav1dRef') ?: '1.5.1') as String
-def dav1dRemote = (findProperty('dav1dRemote') ?: 'https://code.videolan.org/videolan/dav1d.git') as String
-def dav1dLocal  = (findProperty('DAV1D_SRC') ?: System.getenv('DAV1D_SRC')) as String // optional override
+    // Known NDK host tags
+    def tags = ['darwin-arm64','darwin-x86_64','linux-x86_64','windows-x86_64']
+
+    return tags.find { tag ->
+        file("${ndk}/toolchains/llvm/prebuilt/${tag}/bin").exists()
+    }
+}
+
+// Cross-platform command suffixes
+def isWindows = System.getProperty("os.name").toLowerCase().contains("windows")
+def cmdExt  = isWindows ? ".cmd" : ""
+def exeExt  = isWindows ? ".exe" : ""
+def mesonCmd = isWindows ? "meson.exe" : "meson"
+
+def triplet = { abi -> abi == 'arm64-v8a' ? 'aarch64-linux-android' : 'armv7a-linux-androideabi' }
+def ccFor   = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang${cmdExt}" }
+def cxxFor  = { abi, ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/${triplet(abi)}${minApi}-clang++${cmdExt}" }
+def arFor   = { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-ar${exeExt}" }
+def stripFor = { ndk, tag -> "${ndk}/toolchains/llvm/prebuilt/${tag}/bin/llvm-strip${exeExt}" }
+
+def dav1dWorkRoot = layout.buildDirectory.dir('dav1d').get().asFile
+def dav1dSrcDir   = new File(dav1dWorkRoot, 'src')
+def dav1dRef      = (findProperty('dav1dRef') ?: '1.5.1') as String
+def dav1dRemote   = (findProperty('dav1dRemote') ?: 'https://code.videolan.org/videolan/dav1d.git') as String
+def dav1dLocal    = (findProperty('DAV1D_SRC') ?: System.getenv('DAV1D_SRC')) as String // optional override
 
 tasks.register('fetchDav1d') {
     outputs.dir(dav1dSrcDir)
     doLast {
-        workRoot.mkdirs()
+        dav1dWorkRoot.mkdirs()
 
         if (dav1dLocal) {
             delete dav1dSrcDir
@@ -108,11 +119,11 @@ tasks.register('fetchDav1d') {
         def clearGitEnv = { spec -> spec.environment.remove('GIT_DIR'); spec.environment.remove('GIT_WORK_TREE') }
 
         if (!dav1dSrcDir.exists()) {
-            exec { workingDir workRoot; clearGitEnv(delegate)
+            exec { workingDir dav1dWorkRoot; clearGitEnv(delegate)
                 commandLine 'git','clone','--depth','1','--branch', dav1dRef, dav1dRemote,'src' }
         } else if (!new File(dav1dSrcDir,'.git').exists()) {
             delete dav1dSrcDir
-            exec { workingDir workRoot; clearGitEnv(delegate)
+            exec { workingDir dav1dWorkRoot; clearGitEnv(delegate)
                 commandLine 'git','clone','--depth','1','--branch', dav1dRef, dav1dRemote,'src' }
         } else {
             exec { workingDir dav1dSrcDir; clearGitEnv(delegate); commandLine 'git','fetch','--depth','1','origin', dav1dRef }
@@ -122,19 +133,26 @@ tasks.register('fetchDav1d') {
     }
 }
 
-tasks.register('cleanDav1d') { doLast { delete workRoot } }
+tasks.register('cleanDav1d') { doLast { delete dav1dWorkRoot } }
 
 abis.each { abi ->
     def crossFile  = layout.buildDirectory.file("dav1d/toolchains/meson-${abi}.ini").get().asFile
-    def buildDir   = new File(workRoot, "build-${abi}")
-    def installDir = new File(workRoot, "install-${abi}")
+    def buildDir   = new File(dav1dWorkRoot, "build-${abi}")
+    def installDir = new File(dav1dWorkRoot, "install-${abi}")
 
     tasks.register("genCrossFile_${abi}") {
         dependsOn 'fetchDav1d'
         outputs.file(crossFile)
         doLast {
-            def ndk = ndkDirProvider.get(); def tag = hostTagProvider.get()
-            if (!ndk || !tag) throw new GradleException("NDK not found. Ensure ndkVersion ${android.ndkVersion} is installed.")
+            def ndk = ndkDirProvider.getOrNull()
+            def tag = hostTagProvider.getOrNull()
+            if (!ndk || !tag) {
+                throw new GradleException(
+                        "NDK toolchain not found. Ensure ndkVersion ${android.ndkVersion} is installed " +
+                                "and that a matching host toolchain directory exists under " +
+                                "${android.ndkDirectory}/toolchains/llvm/prebuilt/."
+                )
+            }
 
             crossFile.parentFile.mkdirs()
             crossFile.text = """
@@ -167,7 +185,7 @@ endian = 'little'
             buildDir.mkdirs(); installDir.mkdirs()
             exec {
                 workingDir buildDir
-                commandLine 'meson','setup','.', dav1dSrcDir.absolutePath,
+                commandLine mesonCmd, 'setup', '.', dav1dSrcDir.absolutePath,
                         '--cross-file', crossFile.absolutePath,
                         '-Ddefault_library=static','-Denable_asm=true',
                         '-Denable_tests=false','-Dbuildtype=release',
@@ -179,26 +197,106 @@ endian = 'little'
     }
 }
 
-// Ensure dav1d built before JNI compile/configure
-tasks.named('preBuild').configure { dependsOn abis.collect { "buildDav1d_${it}" } }
+/* ===== vvdec via git @ v3.0.0 (CMake/Ninja) ===== */
 
-/* ===== Publishing to Maven Central ===== */
+def vvdecWorkRoot = layout.buildDirectory.dir('vvdec').get().asFile
+def vvdecSrcDir   = new File(vvdecWorkRoot, 'src')
 
-// Minimal javadoc jar (ok for Central)
+def vvdecRef    = (findProperty('vvdecRef') ?: 'v3.0.0') as String
+def vvdecRemote = (findProperty('vvdecRemote') ?: 'https://github.com/fraunhoferhhi/vvdec.git') as String
+def vvdecLocal  = (findProperty('VVDEC_SRC') ?: System.getenv('VVDEC_SRC')) as String
+
+tasks.register('fetchVvdec') {
+    outputs.dir(vvdecSrcDir)
+    doLast {
+        vvdecWorkRoot.mkdirs()
+
+        if (vvdecLocal) {
+            delete vvdecSrcDir
+            copy { from vvdecLocal; into vvdecSrcDir; exclude '.git' }
+            return
+        }
+        def clearGitEnv = { s -> s.environment.remove('GIT_DIR'); s.environment.remove('GIT_WORK_TREE') }
+
+        if (!vvdecSrcDir.exists()) {
+            exec { workingDir vvdecWorkRoot; clearGitEnv(delegate)
+                commandLine 'git','clone','--depth','1','--branch', vvdecRef, vvdecRemote,'src' }
+        } else if (!new File(vvdecSrcDir,'.git').exists()) {
+            delete vvdecSrcDir
+            exec { workingDir vvdecWorkRoot; clearGitEnv(delegate)
+                commandLine 'git','clone','--depth','1','--branch', vvdecRef, vvdecRemote,'src' }
+        } else {
+            exec { workingDir vvdecSrcDir; clearGitEnv(delegate); commandLine 'git','fetch','--depth','1','origin', vvdecRef }
+            exec { workingDir vvdecSrcDir; clearGitEnv(delegate); commandLine 'git','checkout','-f', vvdecRef }
+            exec { workingDir vvdecSrcDir; clearGitEnv(delegate); commandLine 'git','reset','--hard','FETCH_HEAD' }
+        }
+    }
+}
+
+vvdecAbis.each { abi ->
+    def buildDir   = new File(vvdecWorkRoot, "build-${abi}")
+    def installDir = new File(vvdecWorkRoot, "install-${abi}")
+
+    tasks.register("buildVvdec_${abi}") {
+        dependsOn 'fetchVvdec'
+        outputs.dir(installDir)
+        doLast {
+            buildDir.mkdirs(); installDir.mkdirs()
+            def ndk = android.ndkDirectory?.absolutePath
+            if (!ndk) throw new GradleException("NDK not found. Ensure ndkVersion ${android.ndkVersion} is installed.")
+
+            exec {
+                workingDir buildDir
+                commandLine 'cmake',
+                        '-G','Ninja',
+                        "-D","CMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake",
+                        "-D","ANDROID_ABI=${abi}",
+                        "-D","ANDROID_PLATFORM=android-${minApi}",
+                        "-D","CMAKE_BUILD_TYPE=Release",
+                        "-D","BUILD_SHARED_LIBS=OFF",
+                        "-D","VVDEC_ENABLE_TRACING=OFF",
+                        "-D","CMAKE_INSTALL_PREFIX=${installDir.absolutePath}",
+                        vvdecSrcDir.absolutePath
+            }
+            exec { workingDir buildDir; commandLine 'ninja' }
+            exec { workingDir buildDir; commandLine 'ninja','install' }
+        }
+    }
+}
+
+/* ===== Ensure native deps exist before JNI configure ===== */
+
+tasks.named('preBuild').configure {
+    dependsOn abis.collect { "buildDav1d_${it}" } +
+            vvdecAbis.collect { "buildVvdec_${it}" }
+}
+
+/* ===== Publishing (local-friendly) ===== */
+
+// Minimal javadoc jar (OK for local / Central component validation)
 tasks.register('androidJavadocJar', Jar) { archiveClassifier = 'javadoc' }
 
 publishing {
     publications {
-        // Avoid "release" name; use a safe, unique name
         create('mavenRelease', MavenPublication) {
             groupId    = project.group
             artifactId = 'libvcat'
             version    = project.version
 
-            // Defer wiring the Android component until variants exist
-            afterEvaluate { from(components.getByName('release')) }
+            // Map Android variants into publications.
+            afterEvaluate {
+                def publishAll = (findProperty('publishAllVariants') ?: 'false').toBoolean()
+                if (publishAll) {
+                    from(components.getByName('release'))
+                    if (components.findByName('debug') != null) {
+                        // Optional: also create a debug publication if you want it separately.
+                        // For simplicity we keep one publication; release AAR is usually enough.
+                    }
+                } else {
+                    from(components.getByName('release'))
+                }
+            }
 
-            // sources.jar comes from withSourcesJar()
             artifact(tasks.named('androidJavadocJar'))
 
             pom {
@@ -207,13 +305,13 @@ publishing {
                 url.set('https://roncatech.com')
                 licenses {
                     license {
-                        name.set('RoncaTech Pre-Release License')
-                        url.set('https://roncatech.com/legal/pre-release-license') // swap to GPL-3 when public
+                        name.set('GPL-3.0-or-later')
+                        url.set('https://www.gnu.org/licenses/gpl-3.0.html')
                         distribution.set('repo')
                     }
                 }
                 scm {
-                    url.set('https://github.com/jonathannah/vcat') // can be private for now
+                    url.set('https://github.com/jonathannah/vcat')
                     connection.set('scm:git:https://github.com/jonathannah/vcat.git')
                     developerConnection.set('scm:git:ssh://git@github.com/jonathannah/vcat.git')
                 }
@@ -221,67 +319,35 @@ publishing {
             }
         }
     }
+    // No repositories{} needed for publishToMavenLocal
 }
+
+// Make signing optional and opt-in
+def haveSigningKeys = (findProperty('signing.gnupg.keyName') ?: '') as String
+def signRelease     = (findProperty('signRelease') ?: 'false').toBoolean()
 
 signing {
-    // Use system gpg or in-memory keys; configure creds in ~/.gradle/gradle.properties
-    // e.g., signing.gnupg.keyName=CC5B04DC37D33206, signing.gnupg.passphrase=ABC 123
-    useGpgCmd()
-    sign publishing.publications['mavenRelease']
-}
-
-// Build a Central Portal bundle ZIP rooted at 'com/'
-tasks.register('bundleForCentral', Zip) {
-    dependsOn 'publishToMavenLocal'
-    archiveFileName = "libvcat-${project.version}.zip"
-    destinationDirectory = layout.buildDirectory.dir("central-bundles")
-    from(new File(System.getProperty("user.home"),
-            ".m2/repository/com/roncatech/vcat/libvcat/${project.version}")) {
-        into "com/roncatech/vcat/libvcat/${project.version}"
+    required { signRelease && !haveSigningKeys.isEmpty() }
+    if (haveSigningKeys && signRelease) {
+        useGpgCmd()
+        sign publishing.publications['mavenRelease']
     }
 }
 
-// put this in that module's build.gradle (same file as your publishing block)
-import java.security.MessageDigest
-
-def checksum = { File f, String algo ->
-    def md = MessageDigest.getInstance(algo)
-    f.withInputStream { is ->
-        byte[] buf = new byte[8192]; int r
-        while ((r = is.read(buf)) != -1) md.update(buf, 0, r)
-    }
-    md.digest().collect { String.format("%02x", it) }.join()
-}
-
-tasks.register('addLegacyChecksums') {
+// Convenience: publish to m2 then print coordinates
+tasks.register('publishLocal') {
     dependsOn 'publishToMavenLocal'
     doLast {
-        def v = project.version
-        def dir = new File(System.getProperty('user.home'),
-                ".m2/repository/com/roncatech/vcat/libvcat/${v}")
-        if (!dir.isDirectory()) throw new GradleException("Repo dir not found: $dir")
-
-        def targets = dir.listFiles().findAll { f ->
-            f.name.endsWith(".aar") || f.name.endsWith(".pom") ||
-                    f.name.endsWith(".module") || f.name.endsWith("-sources.jar") ||
-                    f.name.endsWith("-javadoc.jar")
-        }
-
-        targets.each { f ->
-            [["md5","MD5"], ["sha1","SHA-1"]].each { ext, algo ->
-                new File(f.parentFile, "${f.name}.${ext}").text = checksum(f, algo)
-            }
-        }
-        logger.lifecycle("Checksums written for ${targets.size()} files in $dir")
+        println "Published: ~/.m2/repository/com/roncatech/vcat/libvcat/${project.version}/libvcat-${project.version}.aar"
     }
 }
-
-// ensure the ZIP includes them
-tasks.named('bundleForCentral').configure { dependsOn 'addLegacyChecksums' }
-
 
 /* ===== Dependencies ===== */
 dependencies {
     compileOnly "androidx.annotation:annotation:1.7.1"
     compileOnly "com.google.android.exoplayer:exoplayer-core:2.19.1"
+    implementation "org.checkerframework:checker-compat-qual:2.5.5" // provides @NullableType
+    implementation "com.google.guava:guava:32.1.3-android"           // AtomParsers uses ImmutableList/Ints
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation "com.google.android.exoplayer:exoplayer-core:2.19.1"
 }

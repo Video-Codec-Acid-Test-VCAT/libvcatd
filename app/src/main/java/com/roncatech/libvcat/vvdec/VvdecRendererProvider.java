@@ -30,12 +30,24 @@
  * Contact: legal@roncatech.com
  */
 
-package com.roncatech.libvcat;
+package com.roncatech.libvcat.vvdec;
 
-import com.google.android.exoplayer2.decoder.DecoderException;
+import android.content.Context;
+import android.os.Handler;
 
-public final class Dav1dDecoderException extends DecoderException {
-    public Dav1dDecoderException(String msg) { super(msg); }
-    public Dav1dDecoderException(Throwable cause) { super(cause); }
-    public Dav1dDecoderException(String msg, Throwable cause) { super(msg, cause); }
+import com.google.android.exoplayer2.Renderer;
+import com.google.android.exoplayer2.video.VideoRendererEventListener;
+
+/** Provider contract for a software VVC (H.266) renderer backed by vvdec. */
+public interface VvdecRendererProvider {
+    /** Stable id used by user config, e.g. "vvdec". */
+    String id();
+
+    /** Quick availability probe (no heavy work). Return false if unavailable on this device/build. */
+    boolean isAvailable(Context context);
+
+    /** Build the renderer or throw IllegalStateException for strict fail. */
+    Renderer build(long allowedJoiningTimeMs,
+                   Handler eventHandler,
+                   VideoRendererEventListener eventListener);
 }

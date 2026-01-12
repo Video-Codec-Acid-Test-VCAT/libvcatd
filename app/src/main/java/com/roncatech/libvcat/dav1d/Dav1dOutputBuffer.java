@@ -30,23 +30,21 @@
  * Contact: legal@roncatech.com
  */
 
-package com.roncatech.libvcat;
+package com.roncatech.libvcat.dav1d;
 
-import android.content.Context;
-import android.os.Handler;
+import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
 
-import com.google.android.exoplayer2.Renderer;
-import com.google.android.exoplayer2.video.VideoRendererEventListener;
+final class Dav1dOutputBuffer extends VideoDecoderOutputBuffer {
+    /** Native handle to a held Dav1dPicture (0 when none). */
+    long nativePic;
 
-public interface Dav1dAv1RendererProvider {
-    /** Stable id used by user config, e.g. "dav1d" or "mediacodec". */
-    String id();
+    Dav1dOutputBuffer(Owner owner) {
+        super(owner);
+    }
 
-    /** Quick availability probe (no heavy work). Return false if unavailable on this device/build. */
-    boolean isAvailable(Context context);
-
-    /** Build the renderer or throw IllegalStateException for strict fail. */
-    Renderer build(long allowedJoiningTimeMs,
-                   Handler eventHandler,
-                   VideoRendererEventListener eventListener);
+    @Override
+    public void clear() {
+        super.clear();
+        nativePic = 0;
+    }
 }

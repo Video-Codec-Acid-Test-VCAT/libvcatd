@@ -1,0 +1,9 @@
+# Normalize text to LF in repo and working tree
+*.java   text eol=lf
+*.kt     text eol=lf
+*.gradle text eol=lf
+*.xml    text eol=lf
+*.sh     text eol=lf
+# (optional) keep Windows scripts CRLF
+*.bat    text eol=crlf
+

@@ -30,21 +30,18 @@
  * Contact: legal@roncatech.com
  */
 
-package com.roncatech.libvcat;
+package com.roncatech.libvcat.vvdec;
 
-import com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer;
+/** Loads the vvdec + JNI shim once. */
+public final class VvdecLibrary {
+    private static volatile boolean loaded;
 
-final class Dav1dOutputBuffer extends VideoDecoderOutputBuffer {
-    /** Native handle to a held Dav1dPicture (0 when none). */
-    long nativePic;
+    private VvdecLibrary() {}
 
-    Dav1dOutputBuffer(Owner owner) {
-        super(owner);
-    }
-
-    @Override
-    public void clear() {
-        super.clear();
-        nativePic = 0;
+    public static synchronized void load() {
+        if (!loaded) {
+            System.loadLibrary("vcat_jni");
+            loaded = true;
+        }
     }
 }

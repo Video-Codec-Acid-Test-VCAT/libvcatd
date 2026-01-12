@@ -30,12 +30,12 @@
  * Contact: legal@roncatech.com
  */
 
-package com.roncatech.libvcat;
+package com.roncatech.libvcat.dav1d;
 
 import android.view.Surface;
 import java.nio.ByteBuffer;
 
-public final class NativeDav1d {
+final class NativeDav1d {
     static {
         // If libdav1d_jni has DT_NEEDED on libdav1d, loading the JNI lib is enough.
         // Loading dav1d first is harmless; ignore if it isn't needed.
