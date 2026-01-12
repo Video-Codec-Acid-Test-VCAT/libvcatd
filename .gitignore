@@ -1,51 +1,71 @@
-# --- Gradle wrapper files (✅ keep these tracked)
-!gradlew
-!gradlew.bat
-!gradle/wrapper/gradle-wrapper.jar
-!gradle/wrapper/gradle-wrapper.properties
-!gradle.properties
-!settings.gradle
-!build.gradle
-!build.gradle.kts
-!settings.gradle.kts
+# =========================
+# OS / editor noise
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
 
-# --- Gradle build output (ignore)
-.gradle/
-build/
-*/build/
-
-# --- Android Studio / IntelliJ
+# =========================
+# IntelliJ / Android Studio
+# =========================
 .idea/
 *.iml
 *.iws
 *.ipr
 
-# --- Local configuration (ignore)
+# Android Studio local config
 local.properties
-.DS_Store
 
-# --- Log and crash files
+# =========================
+# Gradle
+# =========================
+.gradle/
+**/build/
+buildSrc/.gradle/
+
+# Keep Gradle wrapper tracked (recommended)
+!gradlew
+!gradlew.bat
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# =========================
+# Kotlin / Java
+# =========================
+*.class
+*.kotlin_module
+
+# =========================
+# Android artifacts
+# =========================
+*.apk
+*.ap_
+*.aab
+
+# =========================
+# Native build outputs
+# =========================
+.cxx/
+.externalNativeBuild/
+**/obj/
+**/*.so
+
+# =========================
+# Logs / crash dumps
+# =========================
 *.log
 *.hprof
 
-# --- APK and native build artifacts
-*.apk
-*.ap_
-.externalNativeBuild/
-.cxx/
+# =========================
+# Signing keys / secrets
+# =========================
+*.jks
+*.keystore
+*.pem
+*.p12
+.env
+*.properties.local
 
-# --- NDK / JNI build intermediates
-*.so
-obj/
+**/classes.jar
 
-# --- Generated code
-gen/
-bin/
-/classes.jar
-# --- Release artifacts
-app/release/
-
-# --- temp lib folder for decoder
-libs/
-
-extension-dav1d/src/main/cpp/third_party/
