@@ -32,9 +32,6 @@
 package com.roncatech.libvcat.decoder;
 
 import com.roncatech.libvcat.dav1d.VcatDav1dPlugin;
-import com.roncatech.libvcat.vvdec.VcatVvcdecPlugin;
-import com.roncatech.libvcat.vvdec.VvdecProvider;
-// import com.roncatech.libvcat.vvc.VcatVvdecPlugin; // example: add more here
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -51,6 +48,5 @@ final class InternalDecoderLoader {
 
         // Register all *internal* decoders here:
         manager.registerDecoder(new VcatDav1dPlugin());
-        manager.registerDecoder(new VcatVvcdecPlugin());
     }
 }

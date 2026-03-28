@@ -6,7 +6,7 @@ import android.os.Handler;
 import com.google.android.exoplayer2.Renderer;
 import com.google.android.exoplayer2.decoder.DecoderException;
 import com.google.android.exoplayer2.video.VideoRendererEventListener;
-import com.roncatech.libvcat.decoder.VcatDecoderPlugin;
+import com.roncatech.vcat.decoder_plugin_api.VcatDecoderPlugin;
 
 /**
  * VCAT AV1 plugin backed by dav1d.
