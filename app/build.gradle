@@ -10,7 +10,7 @@ plugins {
 }
 
 group   = 'com.roncatech.vcat'
-def baseVersion = '0.0.3.9'
+def baseVersion = '0.0.3.10'
 def localSuffix = (findProperty('localVersionSuffix') ?: '')
 version = baseVersion + localSuffix   // e.g. -PlocalVersionSuffix=-local
 
@@ -248,7 +248,13 @@ publishing {
             }
         }
     }
-    // No repositories{} needed for publishToMavenLocal
+    repositories {
+        // file:// repo generates md5/sha1 checksums required by Central Portal
+        maven {
+            name = 'localStaging'
+            url  = layout.buildDirectory.dir('outputs/staging').get().asFile.toURI()
+        }
+    }
 }
 
 // Make signing optional and opt-in
@@ -263,7 +269,7 @@ signing {
     }
 }
 
-// Convenience: publish to m2 then print coordinates
+// Convenience: publish to m2
 tasks.register('publishLocal') {
     dependsOn 'publishToMavenLocal'
     doLast {
@@ -271,14 +277,74 @@ tasks.register('publishLocal') {
     }
 }
 
+// Workflow:
+//   ./gradlew :app:bundleForCentral [-PgpgKeyName=<KEY_ID>]
+//     → stages artifacts + md5/sha1 checksums to build/outputs/staging/
+//     → GPG-signs every artifact (.asc) using gpg on PATH
+//     → produces build/outputs/central/central-bundle-libvcat-<version>.zip
+//   Upload the ZIP at: central.sonatype.com → Publish → Upload deployment bundle
+
+tasks.register('stageForCentral') {
+    group       = 'publishing'
+    description = 'Publishes to local file:// staging repo, generating md5/sha1 checksums'
+    dependsOn   'publishMavenReleasePublicationToLocalStagingRepository'
+}
+
+tasks.register('signStagedArtifacts') {
+    group       = 'publishing'
+    description = 'GPG-signs every artifact in the staging repo, producing .asc files'
+    dependsOn   'stageForCentral'
+    doLast {
+        def gpgKeyName = (findProperty('gpgKeyName') ?: findProperty('signing.gnupg.keyName') ?: '') as String
+        def stagingDir = layout.buildDirectory.dir('outputs/staging').get().asFile
+        def toSign = []
+        stagingDir.eachFileRecurse { f ->
+            if (f.isFile() && !f.name.endsWith('.asc') && !f.name.endsWith('.module')) {
+                toSign << f
+            }
+        }
+        if (toSign.isEmpty()) throw new GradleException("No staged artifacts found — run stageForCentral first")
+        def gpgPassphrase = (findProperty('gpgPassphrase') ?: '') as String
+        toSign.each { f ->
+            def cmd = ['gpg', '--batch', '--yes', '--pinentry-mode', 'loopback', '--detach-sign', '--armor']
+            if (gpgKeyName) cmd += ['--local-user', gpgKeyName]
+            if (gpgPassphrase) cmd += ['--passphrase-fd', '0']
+            cmd << f.absolutePath
+            exec {
+                commandLine cmd
+                if (gpgPassphrase) standardInput = new ByteArrayInputStream(gpgPassphrase.bytes)
+            }
+            println "Signed: ${f.name}"
+        }
+    }
+}
+
+tasks.register('bundleForCentral', Zip) {
+    group       = 'publishing'
+    description = 'Produces a Central Portal upload bundle from the local staging repo'
+    dependsOn   'signStagedArtifacts'
+
+    def stagingDir = layout.buildDirectory.dir('outputs/staging').get().asFile
+    from(stagingDir) {
+        exclude '**/*.module'
+    }
+
+    archiveFileName      = "central-bundle-libvcat-${project.version}.zip"
+    destinationDirectory = layout.buildDirectory.dir('outputs/central')
+    doLast {
+        println "Bundle: ${archiveFile.get().asFile.absolutePath}"
+        println "Upload at: central.sonatype.com → Publish → Upload deployment bundle"
+    }
+}
+
 /* ===== Dependencies ===== */
 dependencies {
     compileOnly "androidx.annotation:annotation:1.7.1"
     compileOnly "com.google.android.exoplayer:exoplayer-core:2.19.1"
-    compileOnly 'com.roncatech.vcat:decoder-plugin-api:1.0.0'
+    compileOnly 'com.roncatech.vcat:vcatd-decoder-plugin-api:1.0.1'
     implementation "org.checkerframework:checker-compat-qual:2.5.5" // provides @NullableType
     implementation "com.google.guava:guava:32.1.3-android"           // AtomParsers uses ImmutableList/Ints
     testImplementation 'junit:junit:4.13.2'
     testImplementation "com.google.android.exoplayer:exoplayer-core:2.19.1"
-    testImplementation 'com.roncatech.vcat:decoder-plugin-api:1.0.0'
+    testImplementation 'com.roncatech.vcat:vcatd-decoder-plugin-api:1.0.1'
 }
