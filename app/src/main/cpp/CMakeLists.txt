@@ -19,17 +19,14 @@ endif()
 # =========================
 if(${ANDROID_ABI} STREQUAL "arm64-v8a")
     set(DAV1D_INSTALL_DIR "${DAV1D_INSTALL_ARM64_V8A}")
-    set(VVDEC_INSTALL_DIR "${VVDEC_INSTALL_ARM64_V8A}")   # <— pass from Gradle
 elseif(${ANDROID_ABI} STREQUAL "armeabi-v7a")
     set(DAV1D_INSTALL_DIR "${DAV1D_INSTALL_ARMEABI_V7A}")
-    set(VVDEC_INSTALL_DIR "${VVDEC_INSTALL_ARMEABI_V7A}")  # vvdec not built for 32-bit; skip
 else()
     message(FATAL_ERROR "Unsupported ABI: ${ANDROID_ABI}")
 endif()
 
 message(STATUS "ABI='${ANDROID_ABI}'")
 message(STATUS "  DAV1D_INSTALL_DIR='${DAV1D_INSTALL_DIR}'")
-message(STATUS "  VVDEC_INSTALL_DIR='${VVDEC_INSTALL_DIR}'")
 
 # =========================
 # dav1d (required)
@@ -42,30 +39,11 @@ if(NOT EXISTS "${DAV1D_STATIC}")
 endif()
 
 # =========================
-# vvdec (required)
-# =========================
-set(VVDEC_INCLUDE_DIR "${VVDEC_INSTALL_DIR}/include")
-set(VVDEC_LIB_DIR     "${VVDEC_INSTALL_DIR}/lib")
-set(VVDEC_STATIC      "${VVDEC_LIB_DIR}/libvvdec.a")
-
-
-if(NOT EXISTS "${VVDEC_STATIC}")
-    message(FATAL_ERROR "Static vvdec not found: ${VVDEC_STATIC}")
-endif()
-
-# =========================
 # Sources
 # =========================
-set(VCAT_JNI_SOURCES
-        dav1d_jni.cc
-        vvdec_jni.cc
-)
+add_library(vcat_jni SHARED dav1d_jni.cc)
 
-add_library(vcat_jni SHARED ${VCAT_JNI_SOURCES})
-
-# Includes
 target_include_directories(vcat_jni PRIVATE "${DAV1D_INCLUDE_DIR}")
-target_include_directories(vcat_jni PRIVATE "${VVDEC_INCLUDE_DIR}")
 
 # NDK/system libs
 find_library(log_lib     log)
@@ -76,14 +54,11 @@ find_library(z_lib       z)
 target_link_libraries(vcat_jni
         PRIVATE
         "${DAV1D_STATIC}"
-        "${VVDEC_STATIC}"
         ${log_lib}
         ${android_lib}
         ${z_lib}
         c++_static
 )
-
-target_compile_definitions(vcat_jni PRIVATE VCAT_ENABLE_VVDEC=1)
 
 # 32-bit often needs libatomic
 if(${ANDROID_ABI} STREQUAL "armeabi-v7a")

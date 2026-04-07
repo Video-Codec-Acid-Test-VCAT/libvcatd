@@ -32,6 +32,9 @@ package com.roncatech.libvcat.decoder;
  * Contact: legal@roncatech.com
  */
 
+import com.roncatech.vcat.decoder_plugin_api.NonStdDecoderStsdParser;
+import com.roncatech.vcat.decoder_plugin_api.VcatDecoderPlugin;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;

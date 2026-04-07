@@ -10,13 +10,12 @@ plugins {
 }
 
 group   = 'com.roncatech.vcat'
-def baseVersion = '0.0.3.8'
+def baseVersion = '0.0.3.10'
 def localSuffix = (findProperty('localVersionSuffix') ?: '')
 version = baseVersion + localSuffix   // e.g. -PlocalVersionSuffix=-local
 
-def abis      = ['arm64-v8a','armeabi-v7a']
-def vvdecAbis = ['arm64-v8a','armeabi-v7a']          // vvdec arm64 only
-def minApi    = 29
+def abis   = ['arm64-v8a','armeabi-v7a']
+def minApi = 29
 
 android {
     namespace 'com.roncatech.libvcat'
@@ -28,13 +27,11 @@ android {
         targetSdk 35
         ndk { abiFilters.addAll(abis) }
 
-        // CMake gets per-ABI install dirs for dav1d and vvdec
+        // CMake gets per-ABI install dirs for dav1d
         externalNativeBuild {
             cmake {
                 arguments "-DDAV1D_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('dav1d/install-arm64-v8a').get().asFile.absolutePath}",
-                        "-DDAV1D_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('dav1d/install-armeabi-v7a').get().asFile.absolutePath}",
-                        "-DVVDEC_INSTALL_ARM64_V8A=${layout.buildDirectory.dir('vvdec/install-arm64-v8a').get().asFile.absolutePath}",
-                        "-DVVDEC_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('vvdec/install-armeabi-v7a').get().asFile.absolutePath}"
+                        "-DDAV1D_INSTALL_ARMEABI_V7A=${layout.buildDirectory.dir('dav1d/install-armeabi-v7a').get().asFile.absolutePath}"
             }
         }
 
@@ -197,78 +194,10 @@ endian = 'little'
     }
 }
 
-/* ===== vvdec via git @ v3.0.0 (CMake/Ninja) ===== */
-
-def vvdecWorkRoot = layout.buildDirectory.dir('vvdec').get().asFile
-def vvdecSrcDir   = new File(vvdecWorkRoot, 'src')
-
-def vvdecRef    = (findProperty('vvdecRef') ?: 'v3.0.0') as String
-def vvdecRemote = (findProperty('vvdecRemote') ?: 'https://github.com/fraunhoferhhi/vvdec.git') as String
-def vvdecLocal  = (findProperty('VVDEC_SRC') ?: System.getenv('VVDEC_SRC')) as String
-
-tasks.register('fetchVvdec') {
-    outputs.dir(vvdecSrcDir)
-    doLast {
-        vvdecWorkRoot.mkdirs()
-
-        if (vvdecLocal) {
-            delete vvdecSrcDir
-            copy { from vvdecLocal; into vvdecSrcDir; exclude '.git' }
-            return
-        }
-        def clearGitEnv = { s -> s.environment.remove('GIT_DIR'); s.environment.remove('GIT_WORK_TREE') }
-
-        if (!vvdecSrcDir.exists()) {
-            exec { workingDir vvdecWorkRoot; clearGitEnv(delegate)
-                commandLine 'git','clone','--depth','1','--branch', vvdecRef, vvdecRemote,'src' }
-        } else if (!new File(vvdecSrcDir,'.git').exists()) {
-            delete vvdecSrcDir
-            exec { workingDir vvdecWorkRoot; clearGitEnv(delegate)
-                commandLine 'git','clone','--depth','1','--branch', vvdecRef, vvdecRemote,'src' }
-        } else {
-            exec { workingDir vvdecSrcDir; clearGitEnv(delegate); commandLine 'git','fetch','--depth','1','origin', vvdecRef }
-            exec { workingDir vvdecSrcDir; clearGitEnv(delegate); commandLine 'git','checkout','-f', vvdecRef }
-            exec { workingDir vvdecSrcDir; clearGitEnv(delegate); commandLine 'git','reset','--hard','FETCH_HEAD' }
-        }
-    }
-}
-
-vvdecAbis.each { abi ->
-    def buildDir   = new File(vvdecWorkRoot, "build-${abi}")
-    def installDir = new File(vvdecWorkRoot, "install-${abi}")
-
-    tasks.register("buildVvdec_${abi}") {
-        dependsOn 'fetchVvdec'
-        outputs.dir(installDir)
-        doLast {
-            buildDir.mkdirs(); installDir.mkdirs()
-            def ndk = android.ndkDirectory?.absolutePath
-            if (!ndk) throw new GradleException("NDK not found. Ensure ndkVersion ${android.ndkVersion} is installed.")
-
-            exec {
-                workingDir buildDir
-                commandLine 'cmake',
-                        '-G','Ninja',
-                        "-D","CMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake",
-                        "-D","ANDROID_ABI=${abi}",
-                        "-D","ANDROID_PLATFORM=android-${minApi}",
-                        "-D","CMAKE_BUILD_TYPE=Release",
-                        "-D","BUILD_SHARED_LIBS=OFF",
-                        "-D","VVDEC_ENABLE_TRACING=OFF",
-                        "-D","CMAKE_INSTALL_PREFIX=${installDir.absolutePath}",
-                        vvdecSrcDir.absolutePath
-            }
-            exec { workingDir buildDir; commandLine 'ninja' }
-            exec { workingDir buildDir; commandLine 'ninja','install' }
-        }
-    }
-}
-
 /* ===== Ensure native deps exist before JNI configure ===== */
 
 tasks.named('preBuild').configure {
-    dependsOn abis.collect { "buildDav1d_${it}" } +
-            vvdecAbis.collect { "buildVvdec_${it}" }
+    dependsOn abis.collect { "buildDav1d_${it}" }
 }
 
 /* ===== Publishing (local-friendly) ===== */
@@ -319,7 +248,13 @@ publishing {
             }
         }
     }
-    // No repositories{} needed for publishToMavenLocal
+    repositories {
+        // file:// repo generates md5/sha1 checksums required by Central Portal
+        maven {
+            name = 'localStaging'
+            url  = layout.buildDirectory.dir('outputs/staging').get().asFile.toURI()
+        }
+    }
 }
 
 // Make signing optional and opt-in
@@ -334,7 +269,7 @@ signing {
     }
 }
 
-// Convenience: publish to m2 then print coordinates
+// Convenience: publish to m2
 tasks.register('publishLocal') {
     dependsOn 'publishToMavenLocal'
     doLast {
@@ -342,12 +277,74 @@ tasks.register('publishLocal') {
     }
 }
 
+// Workflow:
+//   ./gradlew :app:bundleForCentral [-PgpgKeyName=<KEY_ID>]
+//     → stages artifacts + md5/sha1 checksums to build/outputs/staging/
+//     → GPG-signs every artifact (.asc) using gpg on PATH
+//     → produces build/outputs/central/central-bundle-libvcat-<version>.zip
+//   Upload the ZIP at: central.sonatype.com → Publish → Upload deployment bundle
+
+tasks.register('stageForCentral') {
+    group       = 'publishing'
+    description = 'Publishes to local file:// staging repo, generating md5/sha1 checksums'
+    dependsOn   'publishMavenReleasePublicationToLocalStagingRepository'
+}
+
+tasks.register('signStagedArtifacts') {
+    group       = 'publishing'
+    description = 'GPG-signs every artifact in the staging repo, producing .asc files'
+    dependsOn   'stageForCentral'
+    doLast {
+        def gpgKeyName = (findProperty('gpgKeyName') ?: findProperty('signing.gnupg.keyName') ?: '') as String
+        def stagingDir = layout.buildDirectory.dir('outputs/staging').get().asFile
+        def toSign = []
+        stagingDir.eachFileRecurse { f ->
+            if (f.isFile() && !f.name.endsWith('.asc') && !f.name.endsWith('.module')) {
+                toSign << f
+            }
+        }
+        if (toSign.isEmpty()) throw new GradleException("No staged artifacts found — run stageForCentral first")
+        def gpgPassphrase = (findProperty('gpgPassphrase') ?: '') as String
+        toSign.each { f ->
+            def cmd = ['gpg', '--batch', '--yes', '--pinentry-mode', 'loopback', '--detach-sign', '--armor']
+            if (gpgKeyName) cmd += ['--local-user', gpgKeyName]
+            if (gpgPassphrase) cmd += ['--passphrase-fd', '0']
+            cmd << f.absolutePath
+            exec {
+                commandLine cmd
+                if (gpgPassphrase) standardInput = new ByteArrayInputStream(gpgPassphrase.bytes)
+            }
+            println "Signed: ${f.name}"
+        }
+    }
+}
+
+tasks.register('bundleForCentral', Zip) {
+    group       = 'publishing'
+    description = 'Produces a Central Portal upload bundle from the local staging repo'
+    dependsOn   'signStagedArtifacts'
+
+    def stagingDir = layout.buildDirectory.dir('outputs/staging').get().asFile
+    from(stagingDir) {
+        exclude '**/*.module'
+    }
+
+    archiveFileName      = "central-bundle-libvcat-${project.version}.zip"
+    destinationDirectory = layout.buildDirectory.dir('outputs/central')
+    doLast {
+        println "Bundle: ${archiveFile.get().asFile.absolutePath}"
+        println "Upload at: central.sonatype.com → Publish → Upload deployment bundle"
+    }
+}
+
 /* ===== Dependencies ===== */
 dependencies {
     compileOnly "androidx.annotation:annotation:1.7.1"
     compileOnly "com.google.android.exoplayer:exoplayer-core:2.19.1"
+    compileOnly 'com.roncatech.vcat:vcatd-decoder-plugin-api:1.0.1'
     implementation "org.checkerframework:checker-compat-qual:2.5.5" // provides @NullableType
     implementation "com.google.guava:guava:32.1.3-android"           // AtomParsers uses ImmutableList/Ints
     testImplementation 'junit:junit:4.13.2'
     testImplementation "com.google.android.exoplayer:exoplayer-core:2.19.1"
+    testImplementation 'com.roncatech.vcat:vcatd-decoder-plugin-api:1.0.1'
 }
