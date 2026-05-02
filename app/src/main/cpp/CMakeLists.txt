@@ -69,4 +69,8 @@ if(${ANDROID_ABI} STREQUAL "armeabi-v7a")
 endif()
 
 # Catch missing symbols at link time (fail fast)
-target_link_options(vcat_jni PRIVATE -Wl,--no-undefined)
+# 16KB page-size alignment required for Android 15+ devices
+target_link_options(vcat_jni PRIVATE
+        -Wl,--no-undefined
+        -Wl,-z,max-page-size=16384
+)
